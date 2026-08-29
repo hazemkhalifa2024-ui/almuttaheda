@@ -1,0 +1,7 @@
+{
+  "name": "المتحدة للصيانة",
+  "description": "نظام إدارة ورشة الصيانة للأجهزة واستلام وتسليم الأجهزة وطباعة الإيصالات والملصقات وإدارة الصلاحيات",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
