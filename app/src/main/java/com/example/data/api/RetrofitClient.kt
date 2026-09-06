@@ -1,5 +1,6 @@
 package com.example.data.api
 
+import com.example.BuildConfig
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.Interceptor
@@ -10,8 +11,8 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
-    private const val BASE_URL = "https://ndhflfzjxzgfvruzddyi.supabase.co/rest/v1/"
-    private const val SUPABASE_KEY = "sb_publishable_JsNel3gCHBAfOUMd5rmEUQ_5UVzgYWV"
+    val BASE_URL: String = BuildConfig.SUPABASE_URL.ifBlank { "http://179.198.203.86:8000/rest/v1/" }
+    val SUPABASE_KEY: String = BuildConfig.SUPABASE_ANON_KEY.ifBlank { "YOUR_SELF_HOSTED_ANON_KEY" }
 
     private val authInterceptor = Interceptor { chain ->
         val original = chain.request()

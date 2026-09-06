@@ -6,6 +6,7 @@ import com.example.data.model.InventoryPart
 import com.example.data.model.PartMovementLog
 import com.example.data.model.PrinterConfig
 import com.example.data.model.User
+import com.example.data.model.ShopConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -13,6 +14,81 @@ import kotlinx.coroutines.withContext
 
 class MaintenanceRepository(private val context: android.content.Context? = null) {
     private val api = RetrofitClient.apiService
+
+    suspend fun fetchShopConfig(shopId: String): Result<ShopConfig> = withContext(Dispatchers.IO) {
+        try {
+            val response = api.getShopConfig("eq.$shopId")
+            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
+                Result.success(response.body()!!.first())
+            } else {
+                Result.success(ShopConfig(id = shopId))
+            }
+        } catch (e: Exception) {
+            Result.success(ShopConfig(id = shopId))
+        }
+    }
+
+    suspend fun fetchAllShops(): Result<List<ShopConfig>> = withContext(Dispatchers.IO) {
+        try {
+            val response = api.getAllShops()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to load shops: ${response.code()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createShop(
+        id: String,
+        name: String,
+        address: String,
+        phone: String,
+        receiptFooter: String,
+        subscriptionStatus: String,
+        subscriptionExpiresAt: String,
+        userLimit: Int
+    ): Result<ShopConfig> = withContext(Dispatchers.IO) {
+        val payload = mapOf<String, Any>(
+            "id" to id,
+            "name" to name,
+            "address" to address,
+            "phone" to phone,
+            "receipt_footer" to receiptFooter,
+            "subscription_status" to subscriptionStatus,
+            "subscription_expires_at" to subscriptionExpiresAt,
+            "user_limit" to userLimit,
+            "active_user_count" to 1
+        )
+        try {
+            val response = api.createShop(payload)
+            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
+                Result.success(response.body()!!.first())
+            } else {
+                Result.failure(Exception("Failed to create shop: ${response.code()} - ${response.errorBody()?.string()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateShop(
+        id: String,
+        updates: Map<String, Any>
+    ): Result<ShopConfig> = withContext(Dispatchers.IO) {
+        try {
+            val response = api.updateShop("eq.$id", updates)
+            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
+                Result.success(response.body()!!.first())
+            } else {
+                Result.failure(Exception("Failed to update shop: ${response.code()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
     // In-memory cache & fallback if needed
     private val _devices = MutableStateFlow<List<Device>>(emptyList())
@@ -126,9 +202,9 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         }
     }
 
-    suspend fun fetchDevices(): Result<List<Device>> = withContext(Dispatchers.IO) {
+    suspend fun fetchDevices(shopId: String): Result<List<Device>> = withContext(Dispatchers.IO) {
         try {
-            val response = api.getDevices()
+            val response = api.getDevices("eq.$shopId")
             if (response.isSuccessful && response.body() != null) {
                 val list = response.body()!!
                 _devices.value = list
@@ -138,7 +214,7 @@ class MaintenanceRepository(private val context: android.content.Context? = null
             }
         } catch (e: Exception) {
             // Keep existing cache
-            Result.success(_devices.value)
+            Result.success(_devices.value.filter { it.shopId == shopId })
         }
     }
 
@@ -152,7 +228,8 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         technician: String?,
         receivedByEmployee: String? = null,
         photoUrl: String? = null,
-        dueDate: String? = null
+        dueDate: String? = null,
+        shopId: String
     ): Result<Device> = withContext(Dispatchers.IO) {
         val payload = mutableMapOf<String, Any>(
             "customer_name" to customerName,
@@ -164,7 +241,8 @@ class MaintenanceRepository(private val context: android.content.Context? = null
             "technician" to (technician ?: "tech1"),
             "status" to "received",
             "received_by_employee" to (receivedByEmployee ?: "موظف الاستلام"),
-            "detailed_status" to "diagnosing"
+            "detailed_status" to "diagnosing",
+            "shop_id" to shopId
         )
         if (photoUrl != null) payload["photo_url"] = photoUrl
         if (dueDate != null) payload["due_date"] = dueDate
@@ -191,7 +269,8 @@ class MaintenanceRepository(private val context: android.content.Context? = null
                     detailed_status = "diagnosing",
                     received_by_employee = receivedByEmployee ?: "موظف الاستلام",
                     photo_url = photoUrl,
-                    due_date = dueDate
+                    due_date = dueDate,
+                    shopId = shopId
                 )
                 _devices.value = listOf(localDev) + _devices.value
                 Result.success(localDev)
@@ -211,7 +290,8 @@ class MaintenanceRepository(private val context: android.content.Context? = null
                 detailed_status = "diagnosing",
                 received_by_employee = receivedByEmployee ?: "موظف الاستلام",
                 photo_url = photoUrl,
-                due_date = dueDate
+                due_date = dueDate,
+                shopId = shopId
             )
             _devices.value = listOf(localDev) + _devices.value
             Result.success(localDev)
@@ -308,9 +388,9 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         }
     }
 
-    suspend fun fetchUsers(): Result<List<User>> = withContext(Dispatchers.IO) {
+    suspend fun fetchUsers(shopId: String): Result<List<User>> = withContext(Dispatchers.IO) {
         try {
-            val response = api.getAllUsers()
+            val response = api.getAllUsers("eq.$shopId")
             if (response.isSuccessful && response.body() != null) {
                 val list = response.body()!!
                 _users.value = list
@@ -322,9 +402,9 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         } catch (e: Exception) {
             // Fallback list of users
             val fallback = listOf(
-                User(1, "admin", "admin", "admin", "[\"dashboard\",\"new\",\"delivery\",\"management\",\"permissions\",\"printer\",\"settings\"]"),
-                User(2, "hazem", "123456", "technician", "[\"dashboard\",\"new\",\"delivery\",\"management\"]"),
-                User(3, "tech1", "tech1", "technician", "[\"management\"]")
+                User(1, "admin", "admin", "admin", "[\"dashboard\",\"new\",\"delivery\",\"management\",\"permissions\",\"printer\",\"settings\"]", shopId),
+                User(2, "hazem", "123456", "technician", "[\"dashboard\",\"new\",\"delivery\",\"management\"]", shopId),
+                User(3, "tech1", "tech1", "technician", "[\"management\"]", shopId)
             )
             _users.value = fallback
             saveUsersToLocalPrefs()
@@ -361,13 +441,15 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         username: String,
         password: String,
         role: String,
-        permissions: String
+        permissions: String,
+        shopId: String
     ): Result<User> = withContext(Dispatchers.IO) {
         val payload = mapOf<String, Any>(
             "username" to username,
             "password" to password,
             "role" to role,
-            "permissions" to permissions
+            "permissions" to permissions,
+            "shop_id" to shopId
         )
         try {
             val response = api.createUser(payload)
@@ -378,14 +460,14 @@ class MaintenanceRepository(private val context: android.content.Context? = null
                 Result.success(created)
             } else {
                 val localId = System.currentTimeMillis() % 100000
-                val localUser = User(id = localId, username = username, password = password, role = role, permissions = permissions)
+                val localUser = User(id = localId, username = username, password = password, role = role, permissions = permissions, shopId = shopId)
                 _users.value = _users.value + localUser
                 saveUsersToLocalPrefs()
                 Result.success(localUser)
             }
         } catch (e: Exception) {
             val localId = System.currentTimeMillis() % 100000
-            val localUser = User(id = localId, username = username, password = password, role = role, permissions = permissions)
+            val localUser = User(id = localId, username = username, password = password, role = role, permissions = permissions, shopId = shopId)
             _users.value = _users.value + localUser
             saveUsersToLocalPrefs()
             Result.success(localUser)
@@ -495,9 +577,9 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         }
     }
 
-    suspend fun fetchInventoryParts(): Result<List<InventoryPart>> = withContext(Dispatchers.IO) {
+    suspend fun fetchInventoryParts(shopId: String): Result<List<InventoryPart>> = withContext(Dispatchers.IO) {
         try {
-            val response = api.getInventoryParts()
+            val response = api.getInventoryParts("eq.$shopId")
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
@@ -508,7 +590,7 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         }
     }
 
-    suspend fun createInventoryPart(part: InventoryPart): Result<InventoryPart> = withContext(Dispatchers.IO) {
+    suspend fun createInventoryPart(part: InventoryPart, shopId: String): Result<InventoryPart> = withContext(Dispatchers.IO) {
         val payload = mapOf<String, Any>(
             "id" to part.id,
             "barcode" to part.barcode,
@@ -518,7 +600,8 @@ class MaintenanceRepository(private val context: android.content.Context? = null
             "current_stock" to part.current_stock,
             "unit_cost" to part.unit_cost,
             "selling_price" to part.selling_price,
-            "min_alert_stock" to part.min_alert_stock
+            "min_alert_stock" to part.min_alert_stock,
+            "shop_id" to shopId
         )
         try {
             val response = api.createInventoryPart(payload)
@@ -555,9 +638,9 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         }
     }
 
-    suspend fun fetchPartMovements(): Result<List<PartMovementLog>> = withContext(Dispatchers.IO) {
+    suspend fun fetchPartMovements(shopId: String): Result<List<PartMovementLog>> = withContext(Dispatchers.IO) {
         try {
-            val response = api.getPartMovements()
+            val response = api.getPartMovements("eq.$shopId")
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
@@ -568,7 +651,7 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         }
     }
 
-    suspend fun createPartMovement(movement: PartMovementLog): Result<PartMovementLog> = withContext(Dispatchers.IO) {
+    suspend fun createPartMovement(movement: PartMovementLog, shopId: String): Result<PartMovementLog> = withContext(Dispatchers.IO) {
         val payload = mutableMapOf<String, Any>(
             "id" to movement.id,
             "barcode" to movement.barcode,
@@ -577,7 +660,8 @@ class MaintenanceRepository(private val context: android.content.Context? = null
             "quantity" to movement.quantity,
             "source_destination" to movement.source_destination,
             "employee_name" to movement.employee_name,
-            "timestamp" to movement.timestamp
+            "timestamp" to movement.timestamp,
+            "shop_id" to shopId
         )
         if (movement.device_id != null) payload["device_id"] = movement.device_id
         if (movement.device_ticket != null) payload["device_ticket"] = movement.device_ticket

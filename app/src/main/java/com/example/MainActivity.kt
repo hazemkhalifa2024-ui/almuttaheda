@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -117,6 +118,7 @@ import com.example.ui.screens.UserManagementScreen
 import com.example.ui.screens.PrinterConfigScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.ServerMonitorScreen
+import com.example.ui.screens.SuperAdminDashboardScreen
 import com.example.ui.screens.TechnicianPerformanceScreen
 import com.example.ui.screens.TechnicianWorkspaceScreen
 import com.example.ui.theme.EmeraldDark
@@ -170,6 +172,11 @@ class MainActivity : ComponentActivity() {
                             isLoading = uiState.isLoading,
                             onLogin = { u, p -> viewModel.login(u, p) }
                         )
+                    } else if (viewModel.isSubscriptionLocked) {
+                        SubscriptionLockedScreen(
+                            shopConfig = uiState.session!!.shopConfig!!,
+                            onLogout = { viewModel.logout() }
+                        )
                     } else {
                         MainAppContent(
                             viewModel = viewModel,
@@ -205,6 +212,7 @@ fun MainAppContent(
     // Navigation Items
     val allNavItems = listOf(
         NavItem(AppScreen.DASHBOARD, "الرئيسية", Icons.Default.Dashboard),
+        NavItem(AppScreen.SAAS_MANAGEMENT, "إدارة المنصة والمحلات", Icons.Default.AdminPanelSettings),
         NavItem(AppScreen.TECHNICIAN_WORKSPACE, "ورشة الفني", Icons.Default.Engineering),
         NavItem(AppScreen.INVENTORY_BARCODE, "المخزن والباركود", Icons.Default.QrCodeScanner),
         NavItem(AppScreen.INVENTORY_REPORTS, "تقارير القطع", Icons.Default.Assessment),
@@ -222,7 +230,11 @@ fun MainAppContent(
 
     val visibleNavItems = remember(session.allowedScreens, session.role) {
         allNavItems.filter { item ->
-            if (item.screen == AppScreen.USER_MANAGEMENT || item.screen == AppScreen.SERVER_MONITOR) {
+            if (session.role == "super_admin") {
+                item.screen == AppScreen.SAAS_MANAGEMENT || item.screen == AppScreen.SETTINGS
+            } else if (item.screen == AppScreen.SAAS_MANAGEMENT) {
+                false
+            } else if (item.screen == AppScreen.USER_MANAGEMENT || item.screen == AppScreen.SERVER_MONITOR) {
                 session.role == "admin"
             } else if (session.role == "admin") {
                 true
@@ -329,13 +341,13 @@ fun MainAppContent(
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "المتحدة للصيانة",
+                        text = uiState.session?.shopConfig?.name ?: "المتحدة للصيانة",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )
                     Text(
-                        text = (uiState.printerConfig.shopName.ifBlank { "UNITED WORKSHOP" }).uppercase(),
+                        text = (uiState.session?.shopConfig?.name ?: uiState.printerConfig.shopName.ifBlank { "UNITED WORKSHOP" }).uppercase(),
                         fontSize = 10.sp,
                         color = Color.White.copy(alpha = 0.8f)
                     )
@@ -412,14 +424,14 @@ fun MainAppContent(
                         }
                         Column {
                             Text(
-                                text = "المتحدة للصيانة",
+                                text = uiState.session?.shopConfig?.name ?: "المتحدة للصيانة",
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 letterSpacing = (-0.3).sp
                             )
                             Text(
-                                text = (uiState.printerConfig.shopName.ifBlank { "UNITED WORKSHOP" }).uppercase(),
+                                text = (uiState.session?.shopConfig?.name ?: uiState.printerConfig.shopName.ifBlank { "UNITED WORKSHOP" }).uppercase(),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = EmeraldPrimaryLight,
@@ -462,7 +474,7 @@ fun MainAppContent(
                             .padding(start = 10.dp, end = 4.dp, top = 3.dp, bottom = 3.dp)
                     ) {
                         Text(
-                            text = if (session.role == "admin") "المدير" else session.displayName,
+                            text = if (session.role == "super_admin") "مدير المنصة" else if (session.role == "admin") "المدير" else session.displayName,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -472,7 +484,7 @@ fun MainAppContent(
                             modifier = Modifier
                                 .size(26.dp)
                                 .clip(CircleShape)
-                                .background(if (session.role == "admin") EmeraldDark else Slate700),
+                                .background(if (session.role == "super_admin") RedAccent else if (session.role == "admin") EmeraldDark else Slate700),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -656,6 +668,17 @@ fun MainAppContent(
                     devices = uiState.devices,
                     onBack = { viewModel.navigateTo(AppScreen.DASHBOARD) }
                 )
+
+                AppScreen.SAAS_MANAGEMENT -> SuperAdminDashboardScreen(
+                    shops = uiState.shops,
+                    onLoadShops = { viewModel.loadShops() },
+                    onAddShop = { id, name, addr, phone, footer, status, expires, maxUsers ->
+                        viewModel.addNewShop(id, name, addr, phone, footer, status, expires, maxUsers)
+                    },
+                    onUpdateSubscription = { id, isActive, expires, limit ->
+                        viewModel.updateShopSubscription(id, isActive, expires, limit)
+                    }
+                )
             }
         }
 
@@ -734,3 +757,98 @@ fun MainAppContent(
     }
 }
 }
+
+@Composable
+fun SubscriptionLockedScreen(
+    shopConfig: com.example.data.model.ShopConfig,
+    onLogout: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 500.dp)
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(24.dp))
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(CircleShape)
+                        .background(RedAccent.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AdminPanelSettings,
+                        contentDescription = null,
+                        tint = RedAccent,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+
+                Text(
+                    text = "عذراً، الحساب متوقف حالياً",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                Text(
+                    text = "المحل: ${shopConfig.name}",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = EmeraldPrimary
+                )
+
+                val expiryText = shopConfig.subscriptionExpiresAt ?: "غير محدد"
+                val reasonText = if (!shopConfig.isSubscriptionActive) {
+                    "انتهت فترة الاشتراك الخاص بمؤسستك في: $expiryText"
+                } else {
+                    "تم تجاوز الحد الأقصى المسموح به للمستخدمين في باقتك الحالية (${shopConfig.userLimit} مستخدم)"
+                }
+
+                Text(
+                    text = reasonText,
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 22.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = { /* Contact admin */ },
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    Text("التواصل مع الدعم الفني للتجديد", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+
+                OutlinedButton(
+                    onClick = onLogout,
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    Text("تسجيل الخروج والعودة", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+

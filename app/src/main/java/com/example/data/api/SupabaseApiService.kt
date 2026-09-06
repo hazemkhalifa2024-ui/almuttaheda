@@ -4,6 +4,7 @@ import com.example.data.model.Device
 import com.example.data.model.InventoryPart
 import com.example.data.model.PartMovementLog
 import com.example.data.model.User
+import com.example.data.model.ShopConfig
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
@@ -14,6 +15,29 @@ import retrofit2.http.Query
 
 interface SupabaseApiService {
 
+    @GET("Shops")
+    suspend fun getShopConfig(
+        @Query("id") idQuery: String
+    ): Response<List<ShopConfig>>
+
+    @GET("Shops")
+    suspend fun getAllShops(
+        @Query("order") order: String = "id.desc"
+    ): Response<List<ShopConfig>>
+
+    @POST("Shops")
+    suspend fun createShop(
+        @Body shop: Map<String, @JvmSuppressWildcards Any>,
+        @Header("Prefer") prefer: String = "return=representation"
+    ): Response<List<ShopConfig>>
+
+    @PATCH("Shops")
+    suspend fun updateShop(
+        @Query("id") idQuery: String,
+        @Body updates: Map<String, @JvmSuppressWildcards Any>,
+        @Header("Prefer") prefer: String = "return=representation"
+    ): Response<List<ShopConfig>>
+
     @GET("Users")
     suspend fun loginUser(
         @Query("username") usernameQuery: String,
@@ -22,6 +46,7 @@ interface SupabaseApiService {
 
     @GET("Users")
     suspend fun getAllUsers(
+        @Query("shop_id") shopIdQuery: String? = null,
         @Query("order") order: String = "id.desc"
     ): Response<List<User>>
 
@@ -52,6 +77,7 @@ interface SupabaseApiService {
 
     @GET("Devices")
     suspend fun getDevices(
+        @Query("shop_id") shopIdQuery: String? = null,
         @Query("order") order: String = "id.desc"
     ): Response<List<Device>>
 
@@ -70,6 +96,7 @@ interface SupabaseApiService {
 
     @GET("InventoryParts")
     suspend fun getInventoryParts(
+        @Query("shop_id") shopIdQuery: String? = null,
         @Query("order") order: String = "id.desc"
     ): Response<List<InventoryPart>>
 
@@ -88,6 +115,7 @@ interface SupabaseApiService {
 
     @GET("PartMovements")
     suspend fun getPartMovements(
+        @Query("shop_id") shopIdQuery: String? = null,
         @Query("order") order: String = "id.desc"
     ): Response<List<PartMovementLog>>
 

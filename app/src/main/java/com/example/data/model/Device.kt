@@ -23,7 +23,8 @@ data class Device(
     @Json(name = "delivered_at") val delivered_at: String? = null,
     @Json(name = "diagnosed_at") val diagnosed_at: String? = null,
     @Json(name = "photo_url") val photo_url: String? = null,
-    @Json(name = "due_date") val due_date: String? = null
+    @Json(name = "due_date") val due_date: String? = null,
+    @Json(name = "shop_id") val shopId: String? = null
 ) {
     val ticketNumber: String
         get() = "MUT-$id"

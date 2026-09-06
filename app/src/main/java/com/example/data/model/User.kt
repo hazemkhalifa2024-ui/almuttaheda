@@ -9,9 +9,13 @@ data class User(
     @Json(name = "username") val username: String = "",
     @Json(name = "password") val password: String = "",
     @Json(name = "role") val role: String = "technician",
-    @Json(name = "permissions") val permissions: String? = null
+    @Json(name = "permissions") val permissions: String? = null,
+    @Json(name = "shop_id") val shopId: String? = "default_shop"
 ) {
     fun parsePermissions(): List<String> {
+        if (role == "super_admin") {
+            return listOf("saas_management", "dashboard", "new", "delivery", "management", "permissions", "printer", "settings")
+        }
         if (role == "admin") {
             return listOf("dashboard", "new", "delivery", "management", "permissions", "printer", "settings")
         }
@@ -31,5 +35,7 @@ data class SessionUser(
     val username: String,
     val role: String,
     val displayName: String,
-    val allowedScreens: List<String>
+    val allowedScreens: List<String>,
+    val shopId: String = "default_shop",
+    val shopConfig: ShopConfig = ShopConfig()
 )

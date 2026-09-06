@@ -23,6 +23,7 @@ import com.example.data.model.SmsLog
 import com.example.data.model.TechnicianMetrics
 import com.example.data.model.TechnicianNotification
 import com.example.data.model.User
+import com.example.data.model.ShopConfig
 import com.example.data.repository.MaintenanceRepository
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,7 +56,8 @@ enum class AppScreen(val id: String, val title: String) {
     USER_MANAGEMENT("user_management", "إدارة المستخدمين"),
     PRINTER("printer", "الطباعة"),
     SETTINGS("settings", "الإعدادات"),
-    SERVER_MONITOR("server_monitor", "السيرفر وقاعدة البيانات")
+    SERVER_MONITOR("server_monitor", "السيرفر وقاعدة البيانات"),
+    SAAS_MANAGEMENT("saas_management", "إدارة المنصة والمحلات")
 }
 
 data class UiState(
@@ -63,6 +65,7 @@ data class UiState(
     val currentScreen: AppScreen = AppScreen.DASHBOARD,
     val devices: List<Device> = emptyList(),
     val users: List<User> = emptyList(),
+    val shops: List<ShopConfig> = emptyList(),
     val customerProfiles: List<CustomerProfile> = emptyList(),
     val inventoryParts: List<InventoryPart> = emptyList(),
     val movementLogs: List<PartMovementLog> = emptyList(),
@@ -94,6 +97,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _toastEvents = MutableSharedFlow<ToastEvent>()
     val toastEvents: SharedFlow<ToastEvent> = _toastEvents.asSharedFlow()
 
+    val isSubscriptionLocked: Boolean
+        get() {
+            val session = _uiState.value.session ?: return false
+            val config = session.shopConfig ?: return false
+            return !config.isSubscriptionActive || config.isLimitExceeded
+        }
+
     init {
         initDefaultInventory()
         loadPersistedState()
@@ -120,12 +130,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         viewModelScope.launch {
-            repository.fetchInventoryParts().onSuccess { parts ->
+            repository.fetchInventoryParts("default_shop").onSuccess { parts ->
                 if (parts.isNotEmpty()) {
                     _uiState.value = _uiState.value.copy(inventoryParts = parts)
                 }
             }
-            repository.fetchPartMovements().onSuccess { movements ->
+            repository.fetchPartMovements("default_shop").onSuccess { movements ->
                 if (movements.isNotEmpty()) {
                     _uiState.value = _uiState.value.copy(movementLogs = movements)
                 }
@@ -291,11 +301,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     repository.updateInventoryPart(existing.id, updated)
                 } else {
-                    repository.createInventoryPart(part)
+                    val shopId = _uiState.value.session?.shopId ?: "default_shop"
+                    repository.createInventoryPart(part, shopId)
                 }
                 savedCount++
             }
-            repository.fetchInventoryParts().onSuccess { latest ->
+            val shopId = _uiState.value.session?.shopId ?: "default_shop"
+            repository.fetchInventoryParts(shopId).onSuccess { latest ->
                 _uiState.value = _uiState.value.copy(inventoryParts = latest)
             }
             _uiState.value = _uiState.value.copy(isLoading = false)
@@ -313,28 +325,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
             val result = repository.login(username.trim(), password.trim())
-            _uiState.value = _uiState.value.copy(isLoading = false)
 
             result.onSuccess { user ->
+                val shopId = user.shopId ?: "default_shop"
+                val configResult = repository.fetchShopConfig(shopId)
+                val shopConfig = configResult.getOrDefault(ShopConfig(id = shopId))
+
+                _uiState.value = _uiState.value.copy(isLoading = false)
+
                 val allowed = user.parsePermissions()
                 val session = SessionUser(
                     username = user.username,
                     role = user.role,
                     displayName = user.username,
-                    allowedScreens = allowed
+                    allowedScreens = allowed,
+                    shopId = shopId,
+                    shopConfig = shopConfig
                 )
-                val targetScreen = if (user.role == "technician") AppScreen.TECHNICIAN_WORKSPACE else AppScreen.DASHBOARD
-                _uiState.value = _uiState.value.copy(session = session, currentScreen = targetScreen)
+                val targetScreen = if (user.role == "super_admin") AppScreen.SAAS_MANAGEMENT else if (user.role == "technician") AppScreen.TECHNICIAN_WORKSPACE else AppScreen.DASHBOARD
+                _uiState.value = _uiState.value.copy(
+                    session = session, 
+                    currentScreen = targetScreen,
+                    printerConfig = _uiState.value.printerConfig.copy(
+                        shopName = shopConfig.name,
+                        shopPhone = shopConfig.phone ?: "01000000000",
+                        footerNote = shopConfig.receiptFooter ?: "شكراً لزيارتكم الورشة - ضمان شهر ضد عيوب الصيانة"
+                    )
+                )
                 prefs.edit()
                     .putString("session_username", session.username)
                     .putString("session_role", session.role)
                     .putString("session_name", session.displayName)
+                    .putString("session_shop_id", session.shopId)
                     .putStringSet("session_perms", allowed.toSet())
                     .apply()
 
                 _toastEvents.emit(ToastEvent.Success("مرحباً بك، ${session.displayName}"))
                 refreshData()
             }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(isLoading = false)
                 _toastEvents.emit(ToastEvent.Error(err.message ?: "خطأ في تسجيل الدخول"))
             }
         }
@@ -346,6 +375,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .remove("session_username")
             .remove("session_role")
             .remove("session_name")
+            .remove("session_shop_id")
             .remove("session_perms")
             .apply()
     }
@@ -355,21 +385,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshData() {
+        val shopId = _uiState.value.session?.shopId ?: "default_shop"
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
-            repository.fetchDevices()
+            repository.fetchDevices(shopId)
             if (_uiState.value.session?.role == "admin") {
-                repository.fetchUsers()
+                repository.fetchUsers(shopId)
             }
-            repository.fetchInventoryParts().onSuccess { parts ->
-                if (parts.isNotEmpty()) {
-                    _uiState.value = _uiState.value.copy(inventoryParts = parts)
-                }
+            repository.fetchInventoryParts(shopId).onSuccess { parts ->
+                _uiState.value = _uiState.value.copy(inventoryParts = parts)
             }
-            repository.fetchPartMovements().onSuccess { movements ->
-                if (movements.isNotEmpty()) {
-                    _uiState.value = _uiState.value.copy(movementLogs = movements)
-                }
+            repository.fetchPartMovements(shopId).onSuccess { movements ->
+                _uiState.value = _uiState.value.copy(movementLogs = movements)
             }
             _uiState.value = _uiState.value.copy(isLoading = false)
         }
@@ -391,6 +418,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value = _uiState.value.copy(isLoading = true)
             val empName = receivedByEmployee?.trim()?.ifBlank { null } ?: _uiState.value.session?.displayName ?: "موظف الاستلام"
             val targetTech = technician ?: "tech1"
+            val shopId = _uiState.value.session?.shopId ?: "default_shop"
             val result = repository.createDevice(
                 customerName = customerName.trim(),
                 customerPhone = customerPhone?.trim(),
@@ -401,7 +429,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 technician = targetTech,
                 receivedByEmployee = empName,
                 photoUrl = photoUrl,
-                dueDate = dueDate
+                dueDate = dueDate,
+                shopId = shopId
             )
             _uiState.value = _uiState.value.copy(isLoading = false)
 
@@ -570,7 +599,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (targetPart != null) {
                 repository.updateInventoryPart(targetPart.id, targetPart)
             }
-            repository.createPartMovement(movement)
+            val shopId = _uiState.value.session?.shopId ?: "default_shop"
+            repository.createPartMovement(movement, shopId)
 
             val newPartsUsed = if (device.parts_used_summary.isNullOrBlank()) "$partName ($quantity ق)" else "${device.parts_used_summary}, $partName ($quantity ق)"
             val addedCost = (device.estimated_cost?.toDoubleOrNull() ?: 0.0) + cost
@@ -663,12 +693,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value.inventoryParts + newPart
             }
 
+            val shopId = _uiState.value.session?.shopId ?: "default_shop"
             val targetPart = updatedParts.find { it.barcode.equals(cleanBarcode, ignoreCase = true) }
             if (targetPart != null) {
                 if (existing != null) {
                     repository.updateInventoryPart(targetPart.id, targetPart)
                 } else {
-                    repository.createInventoryPart(targetPart)
+                    repository.createInventoryPart(targetPart, shopId)
                 }
             }
 
@@ -685,7 +716,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 notes = "استلام وارد بالباركود",
                 timestamp = nowStr
             )
-            repository.createPartMovement(movement)
+            repository.createPartMovement(movement, shopId)
 
             _uiState.value = _uiState.value.copy(
                 inventoryParts = updatedParts,
@@ -725,7 +756,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 notes = notes ?: "رد زيادة وفائض نهاية اليوم",
                 timestamp = nowStr
             )
-            repository.createPartMovement(movement)
+            val shopId = _uiState.value.session?.shopId ?: "default_shop"
+            repository.createPartMovement(movement, shopId)
 
             _uiState.value = _uiState.value.copy(
                 inventoryParts = updatedParts,
@@ -772,7 +804,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 notes = reason,
                 timestamp = nowStr
             )
-            repository.createPartMovement(movement)
+            val shopId = _uiState.value.session?.shopId ?: "default_shop"
+            repository.createPartMovement(movement, shopId)
 
             _uiState.value = _uiState.value.copy(
                 inventoryParts = updatedParts,
@@ -1086,7 +1119,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 "[\"dashboard\",\"new\",\"delivery\",\"management\"]"
             }
-            val result = repository.createUser(username, password, role, defaultPerms)
+            val shopId = _uiState.value.session?.shopId ?: "default_shop"
+            val result = repository.createUser(username, password, role, defaultPerms, shopId)
             _uiState.value = _uiState.value.copy(isLoading = false)
             result.onSuccess { user ->
                 _toastEvents.emit(ToastEvent.Success("تم إنشاء حساب المستخدم ${user.username} بنجاح"))
@@ -1164,6 +1198,74 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }.onFailure { err ->
                 _toastEvents.emit(ToastEvent.Error("فشلت عملية استعادة البيانات: ${err.message}"))
+            }
+        }
+    }
+
+    fun loadShops() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            repository.fetchAllShops().onSuccess { shopList ->
+                _uiState.value = _uiState.value.copy(shops = shopList)
+            }.onFailure { err ->
+                _toastEvents.emit(ToastEvent.Error("فشل في تحميل قائمة المحلات: ${err.message}"))
+            }
+            _uiState.value = _uiState.value.copy(isLoading = false)
+        }
+    }
+
+    fun addNewShop(
+        id: String,
+        name: String,
+        address: String,
+        phone: String,
+        receiptFooter: String,
+        subscriptionStatus: String,
+        subscriptionExpiresAt: String,
+        userLimit: Int
+    ) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            val result = repository.createShop(
+                id = id.trim(),
+                name = name.trim(),
+                address = address.trim(),
+                phone = phone.trim(),
+                receiptFooter = receiptFooter.trim(),
+                subscriptionStatus = subscriptionStatus,
+                subscriptionExpiresAt = subscriptionExpiresAt,
+                userLimit = userLimit
+            )
+            _uiState.value = _uiState.value.copy(isLoading = false)
+            result.onSuccess { shop ->
+                _toastEvents.emit(ToastEvent.Success("تم تسجيل المحل ${shop.name} بنجاح"))
+                loadShops()
+            }.onFailure { err ->
+                _toastEvents.emit(ToastEvent.Error("فشل في إنشاء المحل: ${err.message}"))
+            }
+        }
+    }
+
+    fun updateShopSubscription(
+        id: String,
+        isActive: Boolean,
+        expiryDate: String,
+        userLimit: Int
+    ) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            val updates = mapOf(
+                "subscription_status" to (if (isActive) "active" else "expired"),
+                "subscription_expires_at" to expiryDate,
+                "user_limit" to userLimit
+            )
+            val result = repository.updateShop(id, updates)
+            _uiState.value = _uiState.value.copy(isLoading = false)
+            result.onSuccess {
+                _toastEvents.emit(ToastEvent.Success("تم تحديث اشتراك المحل بنجاح"))
+                loadShops()
+            }.onFailure { err ->
+                _toastEvents.emit(ToastEvent.Error("فشل التحديث: ${err.message}"))
             }
         }
     }
