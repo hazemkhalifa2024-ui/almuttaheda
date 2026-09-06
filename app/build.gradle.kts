@@ -41,10 +41,25 @@ android {
       }
     }
     create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+      val localKeystore = file("${rootDir}/debug.keystore")
+      if (localKeystore.exists()) {
+        storeFile = localKeystore
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      } else {
+        // Fallback to default Gradle debug keystore if not found locally
+        val defaultKeystore = file(System.getProperty("user.home") + "/.android/debug.keystore")
+        if (defaultKeystore.exists()) {
+          storeFile = defaultKeystore
+        } else {
+          // If neither exists, let gradle handle it or default to a dummy file to avoid compilation crash
+          storeFile = file("${rootDir}/debug.keystore")
+        }
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
     }
   }
 
