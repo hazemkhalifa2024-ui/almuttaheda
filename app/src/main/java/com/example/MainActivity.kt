@@ -545,7 +545,8 @@ fun MainAppContent(
                         viewModel.attachPartToDevice(dev, barcode, name, qty, cost)
                     },
                     onDeviceClick = { viewModel.openDeviceDetail(it) },
-                    onDismissNotification = { viewModel.dismissNotification(it) }
+                    onDismissNotification = { viewModel.dismissNotification(it) },
+                    onWhatsAppClick = { viewModel.shareWhatsApp(context, it) }
                 )
 
                 AppScreen.INVENTORY_BARCODE -> InventoryBarcodeScreen(
@@ -620,7 +621,8 @@ fun MainAppContent(
                     devices = uiState.devices,
                     currentUsername = session.username,
                     userRole = session.role,
-                    onDeviceClick = { viewModel.openDeviceDetail(it) }
+                    onDeviceClick = { viewModel.openDeviceDetail(it) },
+                    onWhatsAppClick = { viewModel.shareWhatsApp(context, it) }
                 )
 
                 AppScreen.CUSTOMER_HISTORY -> CustomerHistoryScreen(
