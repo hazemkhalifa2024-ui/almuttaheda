@@ -519,7 +519,7 @@ class MaintenanceRepository(private val context: android.content.Context? = null
             "customer_phone" to (customerPhone ?: ""),
             "device_name" to deviceName,
             "issue_description" to (issueDescription ?: ""),
-            "estimated_cost" to (estimatedCost ?: "0"),
+            "estimated_cost" to (estimatedCost?.toDoubleOrNull() ?: 0.0),
             "down_payment" to downPayment,
             "technician" to (technician ?: "tech1"),
             "status" to "received",
@@ -527,8 +527,10 @@ class MaintenanceRepository(private val context: android.content.Context? = null
             "detailed_status" to "diagnosing",
             "shop_id" to shopId
         )
-        if (photoUrl != null) payload["photo_url"] = photoUrl
-        if (dueDate != null) payload["due_date"] = dueDate
+        if (photoUrl != null && photoUrl.isNotBlank()) payload["photo_url"] = photoUrl
+        if (dueDate != null && dueDate.isNotBlank() && dueDate != "غير محدد") {
+            payload["due_date"] = dueDate
+        }
 
         try {
             var response = api.createDevice(payload)
@@ -563,7 +565,9 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         )
         if (notes != null) payload["technician_notes"] = notes
         if (partsUsed != null) payload["parts_used_summary"] = partsUsed
-        if (finalCost != null) payload["estimated_cost"] = finalCost
+        if (finalCost != null) {
+            payload["estimated_cost"] = finalCost.toDoubleOrNull() ?: 0.0
+        }
         if (deliveredByEmployee != null) payload["delivered_by_employee"] = deliveredByEmployee
 
         try {

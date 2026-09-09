@@ -459,7 +459,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }.onFailure { err ->
-                _toastEvents.emit(ToastEvent.Error("حدث خطأ أثناء حفظ الجهاز"))
+                _toastEvents.emit(ToastEvent.Error("حدث خطأ أثناء حفظ الجهاز: ${err.localizedMessage ?: err.message ?: "تفاصيل غير متوفرة"}"))
             }
         }
     }
