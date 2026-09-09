@@ -327,7 +327,8 @@ object NetworkPrinterService {
     suspend fun printSticker(
         ipAddress: String,
         device: Device,
-        config: PrinterConfig
+        config: PrinterConfig,
+        copies: Int = 1
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             if (ipAddress.isBlank()) {
@@ -339,18 +340,20 @@ object NetworkPrinterService {
             val outputStream: OutputStream = socket.getOutputStream()
 
             val techName = when (device.technician?.lowercase()) {
-                "tech1" -> "Ahmad"
-                "tech2" -> "Mahmoud"
-                "hazem" -> "Hazem"
-                "admin" -> "Admin"
-                else -> device.technician ?: "N/A"
+                "tech1" -> "أحمد (هاردوير)"
+                "tech2" -> "محمود (شاشات)"
+                "hazem" -> "حازم"
+                "admin" -> "المدير"
+                else -> device.technician ?: "غير محدد"
             }
-            val dueDateStr = device.due_date ?: "N/A"
+            val dueDateStr = device.due_date ?: "بدون"
 
             // Format Arabic text fields for TSPL compatibility (reverse & shape)
             val shopNameShaped = formatArabicForPrinter(config.shopName)
             val customerNameShaped = formatArabicForPrinter(device.customer_name)
             val deviceNameShaped = formatArabicForPrinter(device.device_name)
+            val techNameShaped = formatArabicForPrinter(techName)
+            val dueDateShaped = formatArabicForPrinter(dueDateStr)
 
             // Build TSPL command sequence
             // Standard size 50mm x 30mm with a 3mm gap
@@ -365,15 +368,15 @@ object NetworkPrinterService {
                 append("TEXT 280,10,\"3\",0,1,1,\"${device.ticketNumber}\"\r\n")
                 append("BAR 10,35,380,3\r\n")
                 
-                // Draw Customer & Device Details
+                // Draw Customer & Device Details (Using shaped Arabic text)
                 append("TEXT 10,50,\"2\",0,1,1,\"NAME: $customerNameShaped\"\r\n")
                 append("TEXT 10,75,\"2\",0,1,1,\"DEV: $deviceNameShaped\"\r\n")
-                append("TEXT 10,100,\"2\",0,1,1,\"TECH: $techName\"\r\n")
-                append("TEXT 10,125,\"2\",0,1,1,\"DUE: $dueDateStr\"\r\n")
+                append("TEXT 10,100,\"2\",0,1,1,\"TECH: $techNameShaped\"\r\n")
+                append("TEXT 10,125,\"2\",0,1,1,\"DUE: $dueDateShaped\"\r\n")
                 // Draw Barcode 128
                 append("BARCODE 10,150,\"128\",40,1,0,2,2,\"${device.ticketNumber}\"\r\n")
-                // Print command (1 copy)
-                append("PRINT 1,1\r\n")
+                // Print command (copies)
+                append("PRINT $copies,1\r\n")
             }
 
             outputStream.write(tspl.toByteArray(charset("CP1256")))

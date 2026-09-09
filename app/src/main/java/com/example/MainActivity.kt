@@ -170,7 +170,9 @@ class MainActivity : ComponentActivity() {
                     if (uiState.session == null) {
                         LoginScreen(
                             isLoading = uiState.isLoading,
-                            onLogin = { u, p -> viewModel.login(u, p) }
+                            errorMessage = uiState.loginError,
+                            onLogin = { u, p -> viewModel.login(u, p) },
+                            onClearError = { viewModel.clearLoginError() }
                         )
                     } else if (viewModel.isSubscriptionLocked) {
                         SubscriptionLockedScreen(
@@ -636,9 +638,11 @@ fun MainAppContent(
                 AppScreen.USER_MANAGEMENT -> UserManagementScreen(
                     users = uiState.users,
                     currentUsername = session.username,
+                    shopName = session.shopConfig.name,
                     onCreateUser = { u, p, r -> viewModel.createUser(u, p, r) },
                     onUpdateUser = { uid, u, p, r -> viewModel.updateUser(uid, u, p, r) },
-                    onDeleteUser = { uid -> viewModel.deleteUser(uid) }
+                    onDeleteUser = { uid -> viewModel.deleteUser(uid) },
+                    onResetUserDeviceId = { uid -> viewModel.resetUserDeviceId(uid) }
                 )
 
                 AppScreen.PRINTER -> PrinterConfigScreen(
@@ -665,18 +669,45 @@ fun MainAppContent(
                 )
 
                 AppScreen.SERVER_MONITOR -> ServerMonitorScreen(
+                    session = session,
                     devices = uiState.devices,
                     onBack = { viewModel.navigateTo(AppScreen.DASHBOARD) }
                 )
 
                 AppScreen.SAAS_MANAGEMENT -> SuperAdminDashboardScreen(
                     shops = uiState.shops,
+                    users = uiState.users,
                     onLoadShops = { viewModel.loadShops() },
-                    onAddShop = { id, name, addr, phone, footer, status, expires, maxUsers ->
-                        viewModel.addNewShop(id, name, addr, phone, footer, status, expires, maxUsers)
+                    onAddShop = { id, name, addr, phone, footer, status, expires, maxUsers, adminUser, adminPass ->
+                        viewModel.addNewShop(id, name, addr, phone, footer, status, expires, maxUsers, adminUser, adminPass)
                     },
                     onUpdateSubscription = { id, isActive, expires, limit ->
                         viewModel.updateShopSubscription(id, isActive, expires, limit)
+                    },
+                    onDeleteShop = { shopId ->
+                        viewModel.deleteShop(shopId)
+                    },
+                    onAddUserToShop = { username, password, role, shopId ->
+                        viewModel.createUserForShop(username, password, role, shopId)
+                    },
+                    onResetUserDeviceId = { userId ->
+                        viewModel.resetUserDeviceId(userId)
+                    },
+                    onDeleteUser = { userId ->
+                        viewModel.deleteUser(userId)
+                    },
+                    onUpdateUser = { userId, username, password, role ->
+                        viewModel.updateUser(userId, username, password, role)
+                    },
+                    currentServerUrl = viewModel.getServerUrl(),
+                    currentAnonKey = viewModel.getAnonKey(),
+                    currentBasicUser = viewModel.getBasicUser(),
+                    currentBasicPass = viewModel.getBasicPass(),
+                    onSaveServerConfig = { url, key, u, p ->
+                        viewModel.updateServerConfig(url, key, u, p)
+                    },
+                    onTestConnection = { url, key, u, p ->
+                        viewModel.testServerConnection(url, key, u, p)
                     }
                 )
             }

@@ -119,7 +119,7 @@ fun NewDeviceScreen(
     var issueDescription by remember { mutableStateOf("") }
     var estimatedCost by remember { mutableStateOf("") }
     var downPayment by remember { mutableStateOf("") }
-    var receivedByEmployee by remember { mutableStateOf(currentEmployeeName) }
+    var receivedByEmployee by remember(currentEmployeeName) { mutableStateOf(currentEmployeeName) }
     var showVoiceDialog by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
@@ -392,7 +392,8 @@ fun NewDeviceScreen(
                         )
                         OutlinedTextField(
                             value = receivedByEmployee,
-                            onValueChange = { receivedByEmployee = it },
+                            onValueChange = {},
+                            readOnly = true,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("received_by_employee_input"),
@@ -401,8 +402,10 @@ fun NewDeviceScreen(
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = EmeraldPrimary,
-                                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                                focusedBorderColor = MaterialTheme.colorScheme.outline,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
                             )
                         )
                     }

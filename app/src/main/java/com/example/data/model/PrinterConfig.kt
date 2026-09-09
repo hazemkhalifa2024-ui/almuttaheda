@@ -21,7 +21,8 @@ data class PrinterConfig(
     val stickerCopies: Int = 1,
 
     // Master Dual Print Engine
-    val dualAutoPrintOnIntake: Boolean = true // عند الحفظ والاستلام: تطبع الطابعتان فوراً تلقائياً!
+    val dualAutoPrintOnIntake: Boolean = true, // عند الحفظ والاستلام: تطبع الطابعتان فوراً تلقائياً!
+    val printStickerTwiceOnSave: Boolean = false // طباعة الاستيكر مرتين عند الحفظ
 ) {
     // Backward compatibility helpers
     val paperWidth: String get() = receiptPaperWidth

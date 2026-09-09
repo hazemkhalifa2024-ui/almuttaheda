@@ -218,13 +218,16 @@ fun StickerPrintDialog(
                     Button(
                         onClick = {
                             scope.launch {
+                                val copies = if (config.printStickerTwiceOnSave) 2 else 1
                                 val result = com.example.data.printer.NetworkPrinterService.printSticker(
                                     ipAddress = config.stickerPrinterIp,
                                     device = device,
-                                    config = config
+                                    config = config,
+                                    copies = copies
                                 )
                                 result.onSuccess {
-                                    android.widget.Toast.makeText(context, "تم إرسال ملصق الباركود للطابعة بنجاح", android.widget.Toast.LENGTH_SHORT).show()
+                                    val msg = if (copies == 2) "تم إرسال ملصق الباركود مرتين للطابعة بنجاح" else "تم إرسال ملصق الباركود للطابعة بنجاح"
+                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                                 }.onFailure { e ->
                                     android.widget.Toast.makeText(context, "خطأ في الاتصال بطابعة الملصقات: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                                 }

@@ -10,24 +10,32 @@ data class User(
     @Json(name = "password") val password: String = "",
     @Json(name = "role") val role: String = "technician",
     @Json(name = "permissions") val permissions: String? = null,
-    @Json(name = "shop_id") val shopId: String? = "default_shop"
+    @Json(name = "shop_id") val shopId: String? = "default_shop",
+    @Json(name = "device_id") val deviceId: String? = null
 ) {
     fun parsePermissions(): List<String> {
         if (role == "super_admin") {
             return listOf("saas_management", "dashboard", "new", "delivery", "management", "permissions", "printer", "settings")
         }
+        if (!permissions.isNullOrBlank()) {
+            val list = try {
+                val clean = permissions.trim().removeSurrounding("[", "]").replace("\"", "")
+                if (clean.isBlank()) emptyList() else clean.split(",").map { it.trim() }
+            } catch (e: Exception) {
+                emptyList()
+            }
+            if (list.isNotEmpty()) return list
+        }
         if (role == "admin") {
-            return listOf("dashboard", "new", "delivery", "management", "permissions", "printer", "settings")
+            return listOf("dashboard", "new", "delivery", "management", "customer_history", "technician_workspace", "technician_performance", "inventory_barcode", "inventory_reports", "permissions", "user_management", "printer", "settings", "server_monitor")
         }
-        if (permissions.isNullOrBlank()) {
-            return listOf("management")
+        if (role == "reception") {
+            return listOf("dashboard", "new", "delivery", "management", "customer_history", "printer")
         }
-        return try {
-            val clean = permissions.trim().removeSurrounding("[", "]").replace("\"", "")
-            if (clean.isBlank()) listOf("management") else clean.split(",").map { it.trim() }
-        } catch (e: Exception) {
-            listOf("management")
+        if (role == "technician") {
+            return listOf("technician_workspace", "management")
         }
+        return listOf("management")
     }
 }
 

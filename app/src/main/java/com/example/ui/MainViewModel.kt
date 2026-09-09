@@ -72,6 +72,7 @@ data class UiState(
     val technicianNotifications: List<TechnicianNotification> = emptyList(),
     val smsLogs: List<SmsLog> = emptyList(),
     val isLoading: Boolean = false,
+    val loginError: String? = null,
     val isDarkMode: Boolean = true,
     val selectedDeviceForDetail: Device? = null,
     val selectedCustomerProfile: CustomerProfile? = null,
@@ -105,7 +106,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
     init {
-        initDefaultInventory()
+        com.example.data.api.RetrofitClient.init(application)
         loadPersistedState()
         viewModelScope.launch {
             repository.devices.collect { list ->
@@ -114,7 +115,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     devices = list,
                     customerProfiles = profiles
                 )
-                // Refresh active selected customer profile if open
                 val currentSelectedPhone = _uiState.value.selectedCustomerProfile?.phone
                 if (!currentSelectedPhone.isNullOrBlank()) {
                     val updatedProfile = profiles.find { it.phone == currentSelectedPhone }
@@ -130,43 +130,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         viewModelScope.launch {
-            repository.fetchInventoryParts("default_shop").onSuccess { parts ->
-                if (parts.isNotEmpty()) {
-                    _uiState.value = _uiState.value.copy(inventoryParts = parts)
-                }
-            }
-            repository.fetchPartMovements("default_shop").onSuccess { movements ->
-                if (movements.isNotEmpty()) {
-                    _uiState.value = _uiState.value.copy(movementLogs = movements)
-                }
+            repository.shops.collect { list ->
+                _uiState.value = _uiState.value.copy(shops = list)
             }
         }
-    }
-
-    private fun initDefaultInventory() {
-        val initialParts = listOf(
-            InventoryPart(id = 1, barcode = "SCR-IP13-ORG", name = "شاشة iPhone 13 أصلية OLED", category = "شاشات", device_model = "iPhone 13", current_stock = 5, unit_cost = 1200.0, selling_price = 1500.0),
-            InventoryPart(id = 2, barcode = "BAT-SAM-A54", name = "بطارية Samsung A54 5000mAh", category = "بطاريات", device_model = "Samsung A54", current_stock = 8, unit_cost = 350.0, selling_price = 500.0),
-            InventoryPart(id = 3, barcode = "CHG-TYPC-FLEX", name = "فلاتة شحن Type-C متعددة", category = "فلاتات", device_model = "عام", current_stock = 15, unit_cost = 80.0, selling_price = 150.0),
-            InventoryPart(id = 4, barcode = "IC-PWR-PM8150", name = "آيسي باور PM8150", category = "آيسيهات", device_model = "Xiaomi/Poco", current_stock = 4, unit_cost = 250.0, selling_price = 400.0),
-            InventoryPart(id = 5, barcode = "GLS-IP11-FRT", name = "باغة شاشة iPhone 11", category = "باغات", device_model = "iPhone 11", current_stock = 12, unit_cost = 100.0, selling_price = 200.0)
-        )
-        val initialLogs = listOf(
-            PartMovementLog(id = 1, barcode = "SCR-IP13-ORG", part_name = "شاشة iPhone 13 أصلية OLED", type = "inward_warehouse", quantity = 5, device_id = null, device_ticket = null, source_destination = "المخزن الرئيسي", employee_name = "حازم خليفة", notes = "استلام إذن تحويل مخزني #1042", timestamp = "2026-08-21 09:30"),
-            PartMovementLog(id = 2, barcode = "BAT-SAM-A54", part_name = "بطارية Samsung A54 5000mAh", type = "inward_warehouse", quantity = 8, device_id = null, device_ticket = null, source_destination = "المخزن الرئيسي", employee_name = "حازم خليفة", notes = "استلام إذن تحويل مخزني #1042", timestamp = "2026-08-21 09:35"),
-            PartMovementLog(id = 3, barcode = "CHG-TYPC-FLEX", part_name = "فلاتة شحن Type-C متعددة", type = "inward_supplier", quantity = 20, device_id = null, device_ticket = null, source_destination = "شركة الفردوس للإلكترونيات (مورد)", employee_name = "أحمد علي", notes = "فاتورة توريد مباشر #5521", timestamp = "2026-08-21 10:15"),
-            PartMovementLog(id = 4, barcode = "IC-PWR-PM8150", part_name = "آيسي باور PM8150", type = "inward_supplier", quantity = 6, device_id = null, device_ticket = null, source_destination = "مؤسسة الأهرام للقطع (مورد)", employee_name = "حازم خليفة", notes = "شراء عاجل لبوردات شاومي", timestamp = "2026-08-21 10:45"),
-            PartMovementLog(id = 5, barcode = "SCR-IP13-ORG", part_name = "شاشة iPhone 13 أصلية OLED", type = "consumed_repair", quantity = 1, device_id = 1, device_ticket = "MUT-101", source_destination = "صيانة جهاز MUT-101 (iPhone 13)", employee_name = "فني الصيانة 1", notes = "تم التركيب واختبار التاتش والألوان بنجاح", timestamp = "2026-08-21 11:20"),
-            PartMovementLog(id = 6, barcode = "BAT-SAM-A54", part_name = "بطارية Samsung A54 5000mAh", type = "consumed_repair", quantity = 1, device_id = 2, device_ticket = "MUT-102", source_destination = "صيانة جهاز MUT-102 (Samsung A54)", employee_name = "tech1", notes = "استبدال بطارية منتفخة واختبار الشحن", timestamp = "2026-08-21 11:50"),
-            PartMovementLog(id = 7, barcode = "CHG-TYPC-FLEX", part_name = "فلاتة شحن Type-C متعددة", type = "consumed_repair", quantity = 1, device_id = 3, device_ticket = "MUT-103", source_destination = "صيانة جهاز MUT-103 (Xiaomi Note 11)", employee_name = "فني الصيانة 1", notes = "تركيب فلاتة شحن جديدة", timestamp = "2026-08-21 12:10"),
-            PartMovementLog(id = 8, barcode = "CHG-TYPC-FLEX", part_name = "فلاتة شحن Type-C متعددة", type = "return_warehouse", quantity = 4, device_id = null, device_ticket = null, source_destination = "المخزن الرئيسي", employee_name = "حازم خليفة", notes = "رد زيادة وفائض عن حاجة الورشة", timestamp = "2026-08-21 12:30"),
-            PartMovementLog(id = 9, barcode = "IC-PWR-PM8150", part_name = "آيسي باور PM8150", type = "defective_damaged", quantity = 1, device_id = null, device_ticket = null, source_destination = "توالف الورشة", employee_name = "أحمد علي", notes = "تلف أثناء الشبلنة والتسخين", timestamp = "2026-08-21 12:40"),
-            PartMovementLog(id = 10, barcode = "GLS-IP11-FRT", part_name = "باغة شاشة iPhone 11", type = "return_supplier", quantity = 2, device_id = null, device_ticket = null, source_destination = "شركة الفردوس للإلكترونيات (مورد)", employee_name = "حازم خليفة", notes = "مرتجع لوجود خدش مصنعي في الباغة", timestamp = "2026-08-21 12:45")
-        )
-        _uiState.value = _uiState.value.copy(
-            inventoryParts = initialParts,
-            movementLogs = initialLogs
-        )
     }
 
     private fun computeCustomerProfiles(deviceList: List<Device>): List<CustomerProfile> {
@@ -217,6 +184,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val stickerWidth = prefs.getString("printer_sticker_width", "50mm x 30mm") ?: "50mm x 30mm"
         val autoPrintSticker = prefs.getBoolean("printer_auto_sticker", true)
         val dualAutoPrint = prefs.getBoolean("printer_dual_auto_print", true)
+        val printStickerTwice = prefs.getBoolean("printer_sticker_twice", false)
 
         val smsEnabled = prefs.getBoolean("sms_enabled", true)
         val smsSid = prefs.getString("sms_sid", "") ?: ""
@@ -247,7 +215,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             stickerPrinterIp = stickerPrinterIp,
             stickerWidth = stickerWidth,
             autoPrintStickerOnIntake = autoPrintSticker,
-            dualAutoPrintOnIntake = dualAutoPrint
+            dualAutoPrintOnIntake = dualAutoPrint,
+            printStickerTwiceOnSave = printStickerTwice
         )
 
         val n8nConfig = N8nConfig(
@@ -321,9 +290,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putBoolean("dark_mode", newDark).apply()
     }
 
+    fun clearLoginError() {
+        _uiState.value = _uiState.value.copy(loginError = null)
+    }
+
     fun login(username: String, password: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+            _uiState.value = _uiState.value.copy(isLoading = true, loginError = null)
             val result = repository.login(username.trim(), password.trim())
 
             result.onSuccess { user ->
@@ -331,7 +304,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val configResult = repository.fetchShopConfig(shopId)
                 val shopConfig = configResult.getOrDefault(ShopConfig(id = shopId))
 
-                _uiState.value = _uiState.value.copy(isLoading = false)
+                _uiState.value = _uiState.value.copy(isLoading = false, loginError = null)
 
                 val allowed = user.parsePermissions()
                 val session = SessionUser(
@@ -346,6 +319,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value = _uiState.value.copy(
                     session = session, 
                     currentScreen = targetScreen,
+                    loginError = null,
                     printerConfig = _uiState.value.printerConfig.copy(
                         shopName = shopConfig.name,
                         shopPhone = shopConfig.phone ?: "01000000000",
@@ -363,8 +337,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _toastEvents.emit(ToastEvent.Success("مرحباً بك، ${session.displayName}"))
                 refreshData()
             }.onFailure { err ->
-                _uiState.value = _uiState.value.copy(isLoading = false)
-                _toastEvents.emit(ToastEvent.Error(err.message ?: "خطأ في تسجيل الدخول"))
+                val errorMsg = err.message ?: "خطأ في تسجيل الدخول"
+                _uiState.value = _uiState.value.copy(isLoading = false, loginError = errorMsg)
+                _toastEvents.emit(ToastEvent.Error(errorMsg))
             }
         }
     }
@@ -455,11 +430,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val printerCfg = _uiState.value.printerConfig
                 val shouldDualPrint = printerCfg.dualAutoPrintOnIntake
                 val shouldReceiptPrint = printerCfg.autoPrintReceiptOnIntake && !shouldDualPrint
+                val shouldStickerTwicePrint = printerCfg.printStickerTwiceOnSave
 
                 _uiState.value = _uiState.value.copy(
                     technicianNotifications = listOf(notif) + _uiState.value.technicianNotifications,
                     dualPrintDevice = if (shouldDualPrint) created else null,
                     receiptToPrint = if (shouldReceiptPrint) created else null,
+                    stickerToPrint = if (shouldStickerTwicePrint) created else null,
                     currentScreen = AppScreen.DASHBOARD
                 )
 
@@ -983,6 +960,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putString("printer_sticker_width", newConfig.stickerWidth)
             .putBoolean("printer_auto_sticker", newConfig.autoPrintStickerOnIntake)
             .putBoolean("printer_dual_auto_print", newConfig.dualAutoPrintOnIntake)
+            .putBoolean("printer_sticker_twice", newConfig.printStickerTwiceOnSave)
             .apply()
         viewModelScope.launch {
             _toastEvents.emit(ToastEvent.Success("تم حفظ إعدادات الطابعتين والطباعة المزدوجة بنجاح"))
@@ -1114,13 +1092,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun createUser(username: String, password: String, role: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
-            val defaultPerms = if (role == "admin") {
-                "[\"dashboard\",\"new\",\"delivery\",\"management\",\"permissions\",\"user_management\",\"printer\",\"settings\"]"
-            } else {
-                "[\"dashboard\",\"new\",\"delivery\",\"management\"]"
+            val defaultPerms = when (role) {
+                "admin" -> "[\"dashboard\",\"new\",\"delivery\",\"management\",\"permissions\",\"user_management\",\"printer\",\"settings\"]"
+                "reception" -> "[\"dashboard\",\"new\",\"delivery\",\"management\",\"customer_history\",\"printer\"]"
+                "technician" -> "[\"technician_workspace\",\"management\"]"
+                else -> "[\"dashboard\",\"new\",\"delivery\",\"management\"]"
             }
-            val shopId = _uiState.value.session?.shopId ?: "default_shop"
-            val result = repository.createUser(username, password, role, defaultPerms, shopId)
+            val currentSession = _uiState.value.session
+            val shopId = currentSession?.shopId ?: "default_shop"
+            val rawShopName = currentSession?.shopConfig?.name?.trim()?.ifBlank { null }
+                ?: _uiState.value.shops.find { it.id == shopId }?.name?.trim()?.ifBlank { null }
+                ?: shopId
+            val shopPrefix = rawShopName.replace(" ", "_")
+
+            val rawUser = username.trim()
+            val finalUsername = if (rawUser.startsWith("$rawShopName-") || rawUser.startsWith("$shopPrefix-")) {
+                rawUser
+            } else {
+                "$rawShopName-$rawUser"
+            }
+
+            val result = repository.createUser(finalUsername, password, role, defaultPerms, shopId)
             _uiState.value = _uiState.value.copy(isLoading = false)
             result.onSuccess { user ->
                 _toastEvents.emit(ToastEvent.Success("تم إنشاء حساب المستخدم ${user.username} بنجاح"))
@@ -1152,6 +1144,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _toastEvents.emit(ToastEvent.Success("تم حذف حساب المستخدم بنجاح"))
             }.onFailure { e ->
                 _toastEvents.emit(ToastEvent.Error("فشل حذف الحساب: ${e.localizedMessage}"))
+            }
+        }
+    }
+
+    fun resetUserDeviceId(userId: Long) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            val result = repository.resetUserDeviceId(userId)
+            _uiState.value = _uiState.value.copy(isLoading = false)
+            result.onSuccess { user ->
+                _toastEvents.emit(ToastEvent.Success("تم فك قيد الهاتف للموظف ${user.username} بنجاح! جاهز للتفعيل على هاتف آخر."))
+            }.onFailure { e ->
+                _toastEvents.emit(ToastEvent.Error("فشل فك قيد هاتف المستخدم: ${e.localizedMessage}"))
             }
         }
     }
@@ -1222,12 +1227,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         receiptFooter: String,
         subscriptionStatus: String,
         subscriptionExpiresAt: String,
-        userLimit: Int
+        userLimit: Int,
+        adminUsername: String? = null,
+        adminPassword: String? = null
     ) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
+            val cleanId = id.trim().ifBlank { "shop_${(1000..9999).random()}" }
             val result = repository.createShop(
-                id = id.trim(),
+                id = cleanId,
                 name = name.trim(),
                 address = address.trim(),
                 phone = phone.trim(),
@@ -1236,12 +1244,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 subscriptionExpiresAt = subscriptionExpiresAt,
                 userLimit = userLimit
             )
+            if (!adminUsername.isNullOrBlank() && !adminPassword.isNullOrBlank()) {
+                val adminPerms = "[\"dashboard\",\"new\",\"delivery\",\"management\",\"permissions\",\"user_management\",\"printer\",\"settings\"]"
+                val rawShopName = name.trim().ifBlank { cleanId }
+                val shopPrefix = rawShopName.replace(" ", "_")
+                val rawAdminUser = adminUsername.trim()
+                val finalAdminUser = if (rawAdminUser.startsWith("$rawShopName-") || rawAdminUser.startsWith("$shopPrefix-")) {
+                    rawAdminUser
+                } else {
+                    "$rawShopName-$rawAdminUser"
+                }
+                repository.createUser(finalAdminUser, adminPassword.trim(), "admin", adminPerms, cleanId)
+            }
             _uiState.value = _uiState.value.copy(isLoading = false)
             result.onSuccess { shop ->
-                _toastEvents.emit(ToastEvent.Success("تم تسجيل المحل ${shop.name} بنجاح"))
+                _toastEvents.emit(ToastEvent.Success("تم تسجيل المحل ${shop.name} وحساب المدير بنجاح"))
                 loadShops()
             }.onFailure { err ->
                 _toastEvents.emit(ToastEvent.Error("فشل في إنشاء المحل: ${err.message}"))
+            }
+        }
+    }
+
+    fun createUserForShop(username: String, password: String, role: String, shopId: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            val defaultPerms = when (role) {
+                "admin" -> "[\"dashboard\",\"new\",\"delivery\",\"management\",\"permissions\",\"user_management\",\"printer\",\"settings\"]"
+                "reception" -> "[\"dashboard\",\"new\",\"delivery\",\"management\",\"customer_history\",\"printer\"]"
+                "technician" -> "[\"technician_workspace\",\"management\"]"
+                else -> "[\"dashboard\",\"new\",\"delivery\",\"management\"]"
+            }
+            val targetShop = _uiState.value.shops.find { it.id == shopId }
+            val rawShopName = targetShop?.name?.trim()?.ifBlank { null } ?: shopId
+            val shopPrefix = rawShopName.replace(" ", "_")
+
+            val rawUser = username.trim()
+            val finalUsername = if (rawUser.startsWith("$rawShopName-") || rawUser.startsWith("$shopPrefix-")) {
+                rawUser
+            } else {
+                "$rawShopName-$rawUser"
+            }
+
+            val result = repository.createUser(finalUsername, password.trim(), role, defaultPerms, shopId)
+            _uiState.value = _uiState.value.copy(isLoading = false)
+            result.onSuccess { user ->
+                _toastEvents.emit(ToastEvent.Success("تم إنشاء حساب المستخدم ${user.username} في الفرع بنجاح"))
+                loadShops()
+            }.onFailure { e ->
+                _toastEvents.emit(ToastEvent.Error("فشل إنشاء الحساب: ${e.localizedMessage}"))
             }
         }
     }
@@ -1268,5 +1319,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _toastEvents.emit(ToastEvent.Error("فشل التحديث: ${err.message}"))
             }
         }
+    }
+
+    fun deleteShop(shopId: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            val result = repository.deleteShop(shopId)
+            _uiState.value = _uiState.value.copy(isLoading = false)
+            result.onSuccess {
+                _toastEvents.emit(ToastEvent.Success("تم حذف المحل بنجاح"))
+                loadShops()
+            }.onFailure { e ->
+                _toastEvents.emit(ToastEvent.Error("فشل حذف المحل: ${e.message}"))
+            }
+        }
+    }
+
+    fun getServerUrl(): String = com.example.data.api.RetrofitClient.getServerUrl()
+    fun getAnonKey(): String = com.example.data.api.RetrofitClient.getAnonKey()
+    fun getBasicUser(): String = com.example.data.api.RetrofitClient.getBasicUser()
+    fun getBasicPass(): String = com.example.data.api.RetrofitClient.getBasicPass()
+
+    fun updateServerConfig(url: String, anonKey: String, basicUser: String, basicPass: String) {
+        com.example.data.api.RetrofitClient.updateConfig(getApplication(), url, anonKey, basicUser, basicPass)
+        viewModelScope.launch {
+            _toastEvents.emit(ToastEvent.Success("تم حفظ وتحديث إعدادات السيرفر بنجاح"))
+            loadShops()
+        }
+    }
+
+    suspend fun testServerConnection(url: String, anonKey: String, basicUser: String, basicPass: String): Result<String> {
+        return com.example.data.api.RetrofitClient.testConnection(url, anonKey, basicUser, basicPass)
     }
 }

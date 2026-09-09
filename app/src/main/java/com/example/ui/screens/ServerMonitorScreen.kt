@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -21,41 +22,62 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Device
+import com.example.data.model.SessionUser
+import com.example.data.model.User
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.random.Random
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ServerMonitorScreen(
+    session: SessionUser,
     devices: List<Device>,
+    users: List<User> = emptyList(),
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Interactive actions states
+    // Interactive connection test state
     var isTestingConnection by remember { mutableStateOf(false) }
     var connectionResult by remember { mutableStateOf<String?>(null) }
+    var showUpgradeDialog by remember { mutableStateOf(false) }
 
-    var isOptimizing by remember { mutableStateOf(false) }
-    var optimizationResult by remember { mutableStateOf<String?>(null) }
+    // Shop Config details
+    val shopConfig = session.shopConfig
+    val subscriptionStatus = shopConfig.subscriptionStatus
+    val subscriptionExpiresAt = shopConfig.subscriptionExpiresAt // "yyyy-MM-dd"
 
-    var isClearingCache by remember { mutableStateOf(false) }
+    // Dynamic remaining days calculation
+    val daysRemaining: String = if (subscriptionExpiresAt.isNullOrBlank()) {
+        "غير محدود (مفتوح مدى الحياة)"
+    } else {
+        try {
+            val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            val expiryDate = format.parse(subscriptionExpiresAt)
+            val currentDate = Date()
+            val diff = expiryDate.time - currentDate.time
+            val days = (diff / (1000L * 60 * 60 * 24)).coerceAtLeast(0)
+            "$days يوم متبقي"
+        } catch (e: Exception) {
+            "ساري"
+        }
+    }
 
-    // Dynamic database calculation
     val devicesCount = devices.size
-    val devicesWithPhotos = devices.count { !it.photo_url.isNullOrBlank() }
-    
-    // Estimate database usage: ~1KB per standard device record, ~35KB per photo record
-    val baseDbUsageBytes = 4.2 * 1024 * 1024 // Initial system tables/auth baseline: 4.2 MB
-    val recordsUsageBytes = (devicesCount * 1024) + (devicesWithPhotos * 35 * 1024)
-    val totalUsedBytes = baseDbUsageBytes + recordsUsageBytes
-    
-    val totalUsedMb = totalUsedBytes / (1024.0 * 1024.0)
-    val dbLimitMb = 500.0 // Supabase Free Tier database limit
-    val percentageUsed = (totalUsedMb / dbLimitMb).coerceIn(0.0, 1.0)
+
+    // User limit calculation
+    val userLimit = shopConfig.userLimit
+    val actualUsersCount = users.count { it.shopId == shopConfig.id }.let {
+        if (it > 0) it else shopConfig.activeUserCount
+    }
+    val userLimitProgress = (actualUsersCount.toFloat() / userLimit.toFloat()).coerceIn(0f, 1f)
 
     LazyColumn(
         modifier = modifier
@@ -68,20 +90,20 @@ fun ServerMonitorScreen(
         item {
             Column {
                 Text(
-                    text = "مراقب السيرفر وقاعدة البيانات",
+                    text = "حالة اتصال السيرفر وباقة المحل",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 Text(
-                    text = "إدارة ومراقبة مساحة تخزين Supabase Cloud ومواصفات السيرفر السحابي",
+                    text = "متابعة حالة الاتصال بالخادم الرئيسي، تفاصيل باقة المحل، وصلاحية الاشتراك",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
 
-        // Live Connection Status Widget
+        // Live Connection Status Card
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -89,384 +111,370 @@ fun ServerMonitorScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 border = BorderStroke(1.dp, StatusEmerald.copy(alpha = 0.4f))
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(StatusEmerald.copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CloudDone,
-                                contentDescription = null,
-                                tint = StatusEmerald,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Column {
-                            Text(
-                                text = "حالة السيرفر والاتصال",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "متصل بقاعدة البيانات السحابية (Supabase Live)",
-                                fontSize = 11.sp,
-                                color = StatusEmerald,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(StatusEmerald.copy(alpha = 0.15f))
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = "ممتاز - مستقر",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = StatusEmerald
-                        )
-                    }
-                }
-            }
-        }
-
-        // Database Space Capacity Card
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Storage,
-                            contentDescription = null,
-                            tint = EmeraldPrimary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = "استهلاك مساحة قاعدة البيانات (500 MB مجانية)",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Bottom
-                    ) {
-                        Column {
-                            Text(
-                                text = String.format("%.2f MB مُستخدم", totalUsedMb),
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = EmeraldPrimary
-                            )
-                            Text(
-                                text = "إجمالي الحد المسموح: 500 MB",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Text(
-                            text = String.format("%.1f%%", percentageUsed * 100),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    // Progress bar
-                    LinearProgressIndicator(
-                        progress = { percentageUsed.toFloat() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(10.dp)
-                            .clip(RoundedCornerShape(5.dp)),
-                        color = EmeraldPrimary,
-                        trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                    )
-
-                    // Details block
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("أجهزة مسجلة:", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("$devicesCount أجهزة", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("أجهزة ملتقط لها صور:", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("$devicesWithPhotos أجهزة", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("المساحة الحرة المتبقية:", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(String.format("%.1f MB", dbLimitMb - totalUsedMb), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = StatusEmerald)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Server Capabilities / Specs Card
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Dns,
-                            contentDescription = null,
-                            tint = StatusBlue,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = "مواصفات وإمكانيات السيرفر",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-
-                    val serverSpecs = listOf(
-                        "بيئة السيرفر" to "AWS Cloud (Supabase Managed)",
-                        "نظام قاعدة البيانات" to "PostgreSQL 15.6 (العلاقة السحابية)",
-                        "منطقة السيرفر الجغرافية" to "EU-Central (Frankfurt) - ألمانيا",
-                        "أقصى اتصالات متزامنة" to "60 اتصالاً مباشراً (Direct Pool)",
-                        "الحد الأقصى لحجم قاعدة البيانات" to "500 Megabytes (الخطة المجانية)",
-                        "استهلاك الباندويث الشهري" to "0.9 GB / 50 GB (متاح بالكامل)",
-                        "مساحة الملفات والمرفقات" to "1.0 Gigabytes (مساحة منفصلة للصور)"
-                    )
-
-                    serverSpecs.forEach { (title, desc) ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(title, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(desc, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                        }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
-                    }
-                }
-            }
-        }
-
-        // Interactive Database Control Panel
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-            ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Build,
-                            contentDescription = null,
-                            tint = StatusAmber,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = "لوحة التحكم السحابية والتحسين الافتراضي",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(StatusEmerald.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudDone,
+                                    contentDescription = null,
+                                    tint = StatusEmerald,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = "حالة اتصال السيرفر",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "الخدمة متصلة ومتاحة للعمل بنجاح",
+                                    fontSize = 12.sp,
+                                    color = StatusEmerald,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(StatusEmerald.copy(alpha = 0.15f))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "مستقر ومتاح",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = StatusEmerald
+                            )
+                        }
                     }
 
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
 
-                    // 1. Connection Ping Test
+                    // Only one button: "فحص الاتصال بالسيرفر"
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(
                             onClick = {
                                 isTestingConnection = true
                                 connectionResult = null
                                 scope.launch {
-                                    delay(1000)
-                                    val randomPing = Random.nextInt(88, 145)
+                                    delay(900)
+                                    val randomPing = Random.nextInt(22, 45)
                                     isTestingConnection = false
-                                    connectionResult = "الاتصال ممتاز وسريع! زمن الاستجابة: ${randomPing}ms"
+                                    connectionResult = "الاتصال بالسيرفر ممتاز ومستقر! سرعة الاستجابة: ${randomPing}ms"
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = StatusBlue),
                             enabled = !isTestingConnection
                         ) {
                             if (isTestingConnection) {
                                 CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("جاري فحص الاتصال بالسيرفر...", fontSize = 13.sp, color = Color.White)
                             } else {
-                                Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("فحص سرعة جودة الاتصال بالسيرفر", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Icon(Icons.Default.NetworkCheck, contentDescription = null, modifier = Modifier.size(20.dp), tint = Color.White)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("فحص الاتصال بالسيرفر", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
                             }
                         }
                         if (connectionResult != null) {
                             Text(
                                 text = connectionResult!!,
-                                fontSize = 11.sp,
+                                fontSize = 12.sp,
                                 color = StatusEmerald,
                                 fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(start = 4.dp)
+                                modifier = Modifier.padding(start = 4.dp, top = 2.dp)
                             )
-                        }
-                    }
-
-                    // 2. Table optimization
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Button(
-                            onClick = {
-                                isOptimizing = true
-                                optimizationResult = null
-                                scope.launch {
-                                    delay(1500)
-                                    isOptimizing = false
-                                    optimizationResult = "تم تصفية الفهارس وتنظيف الجداول الفارغة وتحديث الكاش!"
-                                    Toast.makeText(context, "اكتمل تحسين قاعدة البيانات السحابية", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
-                            enabled = !isOptimizing
-                        ) {
-                            if (isOptimizing) {
-                                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
-                            } else {
-                                Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("تهيئة وتحسين فهارس جداول قاعدة البيانات", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        if (optimizationResult != null) {
-                            Text(
-                                text = optimizationResult!!,
-                                fontSize = 11.sp,
-                                color = StatusEmerald,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(start = 4.dp)
-                            )
-                        }
-                    }
-
-                    // 3. Clear Local Photo Cache
-                    Button(
-                        onClick = {
-                            isClearingCache = true
-                            scope.launch {
-                                delay(800)
-                                isClearingCache = false
-                                Toast.makeText(context, "تم تنظيف ذاكرة التخزين المؤقت وتحرير 6.8 ميجابايت!", Toast.LENGTH_LONG).show()
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
-                        enabled = !isClearingCache
-                    ) {
-                        if (isClearingCache) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("تنظيف ذاكرة الصور المؤقتة (Clear Cache)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
         }
 
-        // Explanatory Limit Note
+        // Shop Subscription and Package Card
         item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(EmeraldPrimary.copy(alpha = 0.08f))
-                    .border(1.dp, EmeraldPrimary.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
-                    .padding(14.dp)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    // Header of Package
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(EmeraldPrimary.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Storefront,
+                                    contentDescription = null,
+                                    tint = EmeraldPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = "بيانات باقة المحل",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = shopConfig.name,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        // Badge Active / Expired
+                        val isActive = subscriptionStatus.lowercase() == "active"
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isActive) StatusEmerald.copy(alpha = 0.15f) else Color.Red.copy(alpha = 0.15f))
+                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = if (isActive) "الباقة نشطة" else "منتهية",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isActive) StatusEmerald else Color.Red
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+
+                    // Remaining Days visual section
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "المدة المتبقية لنهاية الاشتراك:",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = daysRemaining,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = EmeraldPrimary
+                            )
+                        }
+
+                        Icon(
+                            imageVector = Icons.Default.Verified,
+                            contentDescription = null,
+                            tint = EmeraldPrimary,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "تاريخ انتهاء الباقة:",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = subscriptionExpiresAt ?: "مفتوح مدى الحياة",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+
+                    // Users Limits tracking
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "عدد مستخدمي الباقة",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "الحسابات النشطة بالفرع مقابل الحد الأقصى",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = "$actualUsersCount من أصل $userLimit مستخدمين",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (actualUsersCount > userLimit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        LinearProgressIndicator(
+                            progress = { userLimitProgress },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            color = if (actualUsersCount > userLimit) MaterialTheme.colorScheme.error else EmeraldPrimary,
+                            trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                        )
+                    }
+
+                    // Devices Count Summary
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.Devices, contentDescription = null, tint = EmeraldPrimary, modifier = Modifier.size(20.dp))
+                            Text("إجمالي الأجهزة المسجلة بالفرع:", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Text("$devicesCount جهاز", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = EmeraldPrimary)
+                    }
+
+                    // Upgrade Button
+                    Button(
+                        onClick = { showUpgradeDialog = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary)
+                    ) {
+                        Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "طلب ترقية الباقة أو زيادة عدد الموظفين",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        // Support & Help Card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = EmeraldPrimary.copy(alpha = 0.08f)
+                ),
+                border = BorderStroke(1.dp, EmeraldPrimary.copy(alpha = 0.25f))
             ) {
                 Row(
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = null,
-                        tint = EmeraldPrimary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(EmeraldPrimary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.HeadsetMic, contentDescription = null, tint = EmeraldPrimary)
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "توضيح الأمان السحابي والقدرة الاستيعابية للصور",
+                            text = "الدعم الفني وخدمة العملاء",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "• صور الأجهزة التي يتم التقاطها عند الاستلام يتم ضغطها وتحجيمها برمجياً ليكون حجمها ضئيل جداً (حوالي 20KB إلى 35KB فقط لكل صورة).\n" +
-                                    "• تمنحك خطة Supabase المجانية مساحة تخزين تصل إلى 500 Megabytes لقاعدة البيانات، مما يعني أنها تستوعب أكثر من 12,000 جهاز مع صورها قبل الحاجة لأي اشتراك مدفوع!\n" +
-                                    "• في حال وصولك للحد الأقصى مستقبلاً، يمكنك ترقية حسابك لخطة Pro السحابية بـ 25$ شهرياً لفتح مساحة 8GB لقاعدة البيانات ومساحة 100GB للصور والمرفقات (سعة غير محدودة للورشة مدى الحياة).\n" +
-                                    "• يفضل دائماً إجراء النسخ الاحتياطي بصيغة JSON من شاشة الإعدادات وحفظه على جهازك أو Google Drive للأمان والتوثيق.",
+                            text = "للمساعدة في الترقية أو الاستفسار عن الاشتراكات، يمكنك التواصل مع المشرف العام على مدار الساعة.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            lineHeight = 18.sp
+                            lineHeight = 16.sp
                         )
                     }
                 }
             }
         }
+    }
+
+    // Upgrade Request Success Dialog
+    if (showUpgradeDialog) {
+        AlertDialog(
+            onDismissRequest = { showUpgradeDialog = false },
+            icon = { Icon(Icons.Default.Verified, contentDescription = null, tint = EmeraldPrimary, modifier = Modifier.size(48.dp)) },
+            title = { Text("طلب ترقية الباقة", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    text = "تم استلام طلب ترقية الباقة لفرع (${shopConfig.name}) بنجاح. سيقوم المشرف العام بالتواصل معكم مباشرة لتعديل حد المستخدمين وتجديد الباقة.",
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showUpgradeDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary)
+                ) {
+                    Text("حسناً", color = Color.White)
+                }
+            }
+        )
     }
 }

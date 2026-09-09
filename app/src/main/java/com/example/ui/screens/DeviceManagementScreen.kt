@@ -19,8 +19,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -38,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,6 +59,7 @@ fun DeviceManagementScreen(
     currentUsername: String,
     userRole: String,
     onDeviceClick: (Device) -> Unit,
+    onWhatsAppClick: (Device) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -212,7 +218,8 @@ fun DeviceManagementScreen(
             items(filteredDevices, key = { it.id }) { device ->
                 DeviceCardItem(
                     device = device,
-                    onClick = { onDeviceClick(device) }
+                    onClick = { onDeviceClick(device) },
+                    onWhatsAppClick = { onWhatsAppClick(device) }
                 )
             }
         }
@@ -223,6 +230,7 @@ fun DeviceManagementScreen(
 fun DeviceCardItem(
     device: Device,
     onClick: () -> Unit,
+    onWhatsAppClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -301,6 +309,36 @@ fun DeviceCardItem(
                     fontWeight = FontWeight.Bold,
                     color = EmeraldPrimary
                 )
+            }
+
+            // WhatsApp Quick Action Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = onWhatsAppClick,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF25D366),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.height(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "مراسلة واتساب",
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "مراسلة واتساب",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

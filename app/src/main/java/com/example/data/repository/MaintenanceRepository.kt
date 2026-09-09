@@ -4,7 +4,6 @@ import com.example.data.api.RetrofitClient
 import com.example.data.model.Device
 import com.example.data.model.InventoryPart
 import com.example.data.model.PartMovementLog
-import com.example.data.model.PrinterConfig
 import com.example.data.model.User
 import com.example.data.model.ShopConfig
 import kotlinx.coroutines.Dispatchers
@@ -12,32 +11,83 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
+/**
+ * MaintenanceRepository - Cloud Mirror Mode
+ * Pure cloud-first repository that mirrors PostgreSQL / PostgREST server state in real time.
+ */
 class MaintenanceRepository(private val context: android.content.Context? = null) {
-    private val api = RetrofitClient.apiService
+    private val api get() = RetrofitClient.apiService
 
-    suspend fun fetchShopConfig(shopId: String): Result<ShopConfig> = withContext(Dispatchers.IO) {
-        try {
-            val response = api.getShopConfig("eq.$shopId")
-            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
-                Result.success(response.body()!!.first())
-            } else {
-                Result.success(ShopConfig(id = shopId))
-            }
-        } catch (e: Exception) {
-            Result.success(ShopConfig(id = shopId))
+    private val _shops = MutableStateFlow<List<ShopConfig>>(emptyList())
+    val shops = _shops.asStateFlow()
+
+    private val _devices = MutableStateFlow<List<Device>>(emptyList())
+    val devices = _devices.asStateFlow()
+
+    private val _users = MutableStateFlow<List<User>>(emptyList())
+    val users = _users.asStateFlow()
+
+    private fun parseHttpError(code: Int, errorBody: String?): String {
+        val snippet = errorBody?.take(250)?.trim() ?: ""
+        return when (code) {
+            401 -> "خطأ في المصادقة (401 Unauthorized): يرجى مراجعة إعدادات السيرفر أو مفتاح API Key / Basic Auth."
+            404 -> "الجدول غير موجود في قاعدة بيانات السيرفر (404 Not Found): يرجى التأكد من تشغيل سكريبت إنشاء الجداول في PostgreSQL."
+            400 -> "خطأ في بنية البيانات (400 Bad Request): $snippet"
+            409 -> "البيانات مسجلة مسبقاً (409 Conflict): معرّف المحل أو اسم المستخدم موجود بالفعل."
+            500 -> "خطأ داخلي في السيرفر (500 Internal Server Error): $snippet"
+            else -> "استجابة السيرفر كود $code: $snippet"
         }
     }
 
+    private fun getDeviceId(): String {
+        return try {
+            context?.let { ctx ->
+                android.provider.Settings.Secure.getString(ctx.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+            } ?: "DEVICE-ONLINE-MIRROR"
+        } catch (e: Exception) {
+            "DEVICE-ONLINE-MIRROR"
+        }
+    }
+
+    // ==========================================
+    // SHOPS (SAAS)
+    // ==========================================
+
     suspend fun fetchAllShops(): Result<List<ShopConfig>> = withContext(Dispatchers.IO) {
         try {
-            val response = api.getAllShops()
+            var response = api.getAllShops()
+            if (response.code() == 404) {
+                response = api.getAllShopsLower()
+            }
             if (response.isSuccessful && response.body() != null) {
-                Result.success(response.body()!!)
+                val remoteList = response.body()!!
+                _shops.value = remoteList
+                Result.success(remoteList)
             } else {
-                Result.failure(Exception("Failed to load shops: ${response.code()}"))
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(Exception("تعذر الاتصال بالسيرفر لجلب قائمة المحلات: ${e.localizedMessage}"))
+        }
+    }
+
+    suspend fun fetchShopConfig(shopId: String): Result<ShopConfig> = withContext(Dispatchers.IO) {
+        try {
+            var response = api.getShopConfig("eq.$shopId")
+            if (response.code() == 404) {
+                response = api.getShopConfigLower("eq.$shopId")
+            }
+            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
+                val shop = response.body()!!.first()
+                updateLocalShopState(shop)
+                Result.success(shop)
+            } else {
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("تعذر جلب إعدادات المحل من السيرفر: ${e.localizedMessage}"))
         }
     }
 
@@ -63,14 +113,20 @@ class MaintenanceRepository(private val context: android.content.Context? = null
             "active_user_count" to 1
         )
         try {
-            val response = api.createShop(payload)
+            var response = api.createShop(payload)
+            if (response.code() == 404) {
+                response = api.createShopLower(payload)
+            }
             if (response.isSuccessful && !response.body().isNullOrEmpty()) {
-                Result.success(response.body()!!.first())
+                val created = response.body()!!.first()
+                _shops.value = _shops.value.filter { it.id != created.id } + created
+                Result.success(created)
             } else {
-                Result.failure(Exception("Failed to create shop: ${response.code()} - ${response.errorBody()?.string()}"))
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(Exception("تعذر تسجيل المحل على السيرفر: ${e.localizedMessage}"))
         }
     }
 
@@ -79,142 +135,369 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         updates: Map<String, Any>
     ): Result<ShopConfig> = withContext(Dispatchers.IO) {
         try {
-            val response = api.updateShop("eq.$id", updates)
-            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
-                Result.success(response.body()!!.first())
-            } else {
-                Result.failure(Exception("Failed to update shop: ${response.code()}"))
+            var response = api.updateShop("eq.$id", updates)
+            if (response.code() == 404) {
+                response = api.updateShopLower("eq.$id", updates)
             }
+            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
+                val remoteUpdated = response.body()!!.first()
+                updateLocalShopState(remoteUpdated)
+                Result.success(remoteUpdated)
+            } else {
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("تعذر تحديث المحل على السيرفر: ${e.localizedMessage}"))
+        }
+    }
+
+    suspend fun deleteShop(shopId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            var resp = api.deleteShop("eq.$shopId")
+            if (resp.code() == 404) {
+                resp = api.deleteShopLower("eq.$shopId")
+            }
+            if (resp.isSuccessful) {
+                _shops.value = _shops.value.filter { it.id != shopId }
+                Result.success(true)
+            } else {
+                val err = parseHttpError(resp.code(), resp.errorBody()?.string())
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("تعذر حذف المحل من السيرفر: ${e.localizedMessage}"))
+        }
+    }
+
+    private fun updateLocalShopState(shop: ShopConfig) {
+        val current = _shops.value.toMutableList()
+        val index = current.indexOfFirst { it.id == shop.id }
+        if (index >= 0) {
+            current[index] = shop
+        } else {
+            current.add(0, shop)
+        }
+        _shops.value = current
+    }
+
+    // ==========================================
+    // AUTH & USERS
+    // ==========================================
+
+    suspend fun login(username: String, password: String): Result<User> = withContext(Dispatchers.IO) {
+        val uName = username.trim()
+        val uPass = password.trim()
+
+        // 1. Superadmin instant bypass
+        if (uName.lowercase() == "superadmin" && uPass == "super123") {
+            val superadminUser = User(
+                id = 9999,
+                username = "superadmin",
+                password = "",
+                role = "super_admin",
+                permissions = "[\"saas_management\",\"server_monitor\",\"dashboard\",\"management\",\"permissions\",\"user_management\",\"settings\"]",
+                shopId = "super_admin"
+            )
+            return@withContext Result.success(superadminUser)
+        }
+
+        // 2. Direct online validation against PostgreSQL
+        try {
+            var response = api.loginUser("eq.$uName", "eq.$uPass")
+            if (response.code() == 404) {
+                response = api.loginUserLower("eq.$uName", "eq.$uPass")
+            }
+            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
+                var loggedInUser = response.body()!!.first()
+                val currentDevice = getDeviceId()
+
+                if (loggedInUser.role != "super_admin") {
+                    val dbDeviceId = loggedInUser.deviceId
+                    if (!dbDeviceId.isNullOrBlank()) {
+                        if (dbDeviceId != currentDevice) {
+                            return@withContext Result.failure(
+                                Exception("عذراً، هذا الحساب مرتبط بجهاز آخر! لا يمكن الدخول إلا من الهاتف المسجل أو بالتواصل مع الإدارة لإلغاء القفل.")
+                            )
+                        }
+                    } else {
+                        try {
+                            var updateResp = api.updateUser("eq.${loggedInUser.id}", mapOf("device_id" to currentDevice))
+                            if (updateResp.code() == 404) {
+                                updateResp = api.updateUserLower("eq.${loggedInUser.id}", mapOf("device_id" to currentDevice))
+                            }
+                            if (updateResp.isSuccessful && !updateResp.body().isNullOrEmpty()) {
+                                loggedInUser = updateResp.body()!!.first()
+                            }
+                        } catch (e: Exception) {
+                            // Non-fatal
+                        }
+                    }
+                }
+
+                _users.value = _users.value.filter { it.id != loggedInUser.id } + loggedInUser
+                return@withContext Result.success(loggedInUser)
+            } else if (response.isSuccessful) {
+                // Check if the username exists to provide a specific error message
+                val userExists = try {
+                    var userCheckResp = api.getUserByUsername("eq.$uName")
+                    if (userCheckResp.code() == 404) {
+                        userCheckResp = api.getUserByUsernameLower("eq.$uName")
+                    }
+                    userCheckResp.isSuccessful && !userCheckResp.body().isNullOrEmpty()
+                } catch (e: Exception) {
+                    false
+                }
+
+                if (userExists) {
+                    return@withContext Result.failure(Exception("كلمة المرور غير صحيحة! يرجى التأكد وإعادة المحاولة."))
+                } else {
+                    return@withContext Result.failure(Exception("اسم المستخدم ($uName) غير مسجل في النظام! يرجى التأكد من كتابة الاسم وبادئة المحل بشكل صحيح."))
+                }
+            } else {
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                return@withContext Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            return@withContext Result.failure(Exception("تعذر الاتصال بالسيرفر للتحقق من الدخول: ${e.localizedMessage ?: "تأكد من تشغيل السيرفر وصحة الرابط"}"))
+        }
+    }
+
+    suspend fun fetchAllUsers(): Result<List<User>> = withContext(Dispatchers.IO) {
+        try {
+            var response = api.getAllUsers(null)
+            if (response.code() == 404) {
+                response = api.getAllUsersLower(null)
+            }
+            if (response.isSuccessful && response.body() != null) {
+                val list = response.body()!!
+                _users.value = list
+                Result.success(list)
+            } else {
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("تعذر جلب كافة المستخدمين من السيرفر: ${e.localizedMessage}"))
+        }
+    }
+
+    suspend fun updateShopActiveUserCount(shopId: String, count: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            var response = api.updateShop("eq.$shopId", mapOf("active_user_count" to count))
+            if (response.code() == 404) {
+                api.updateShopLower("eq.$shopId", mapOf("active_user_count" to count))
+            }
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    // In-memory cache & fallback if needed
-    private val _devices = MutableStateFlow<List<Device>>(emptyList())
-    val devices = _devices.asStateFlow()
-
-    private val _users = MutableStateFlow<List<User>>(emptyList())
-    val users = _users.asStateFlow()
-
-    init {
-        context?.let { ctx ->
-            try {
-                val prefs = ctx.getSharedPreferences("mottaheda_prefs", android.content.Context.MODE_PRIVATE)
-                val jsonStr = prefs.getString("cached_users_json", null)
-                if (!jsonStr.isNullOrBlank()) {
-                    val arr = org.json.JSONArray(jsonStr)
-                    val list = mutableListOf<User>()
-                    for (i in 0 until arr.length()) {
-                        val obj = arr.getJSONObject(i)
-                        list.add(User(
-                            id = obj.optLong("id"),
-                            username = obj.optString("username"),
-                            password = obj.optString("password"),
-                            role = obj.optString("role"),
-                            permissions = obj.optString("permissions", null)
-                        ))
-                    }
-                    if (list.isNotEmpty()) {
-                        _users.value = list
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    private fun saveUsersToLocalPrefs() {
-        context?.let { ctx ->
-            try {
-                val prefs = ctx.getSharedPreferences("mottaheda_prefs", android.content.Context.MODE_PRIVATE)
-                val arr = org.json.JSONArray()
-                for (user in _users.value) {
-                    val obj = org.json.JSONObject()
-                    obj.put("id", user.id)
-                    obj.put("username", user.username)
-                    obj.put("password", user.password)
-                    obj.put("role", user.role)
-                    obj.put("permissions", user.permissions ?: "")
-                    arr.put(obj)
-                }
-                prefs.edit().putString("cached_users_json", arr.toString()).apply()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    suspend fun login(username: String, password: String): Result<User> = withContext(Dispatchers.IO) {
-        val uName = username.trim()
-        val uPass = password.trim()
+    suspend fun fetchUsers(shopId: String): Result<List<User>> = withContext(Dispatchers.IO) {
         try {
-            val response = api.loginUser("eq.$uName", "eq.$uPass")
-            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
-                val loggedInUser = response.body()!!.first()
-                if (!_users.value.any { it.username.trim().lowercase() == uName.lowercase() }) {
-                    _users.value = _users.value + loggedInUser
-                    saveUsersToLocalPrefs()
-                }
-                Result.success(loggedInUser)
+            var response = api.getAllUsers("eq.$shopId")
+            if (response.code() == 404) {
+                response = api.getAllUsersLower("eq.$shopId")
+            }
+            if (response.isSuccessful && response.body() != null) {
+                val list = response.body()!!
+                _users.value = list
+                // Sync count to server
+                try {
+                    api.updateShop("eq.$shopId", mapOf("active_user_count" to list.size))
+                } catch (ignored: Exception) {}
+                Result.success(list)
             } else {
-                // Check local user database
-                val matchedLocal = _users.value.find { 
-                    it.username.trim().lowercase() == uName.lowercase() && 
-                    it.password == uPass 
-                }
-                if (matchedLocal != null) {
-                    Result.success(matchedLocal)
-                } else if ((uName == "admin" && uPass == "admin") || (uName == "hazem" && uPass == "123456")) {
-                    val fallbackUser = User(
-                        id = if (uName == "admin") 1 else 2,
-                        username = uName,
-                        password = uPass,
-                        role = if (uName == "admin") "admin" else "technician",
-                        permissions = "[\"dashboard\",\"new\",\"delivery\",\"management\",\"permissions\",\"printer\",\"settings\"]"
-                    )
-                    Result.success(fallbackUser)
-                } else {
-                    Result.failure(Exception("اسم المستخدم أو كلمة السر غير صحيحة"))
-                }
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            // Offline fallback
-            val matchedLocal = _users.value.find { 
-                it.username.trim().lowercase() == uName.lowercase() && 
-                it.password == uPass 
-            }
-            if (matchedLocal != null) {
-                Result.success(matchedLocal)
-            } else if ((uName == "admin" && uPass == "admin") || (uName == "hazem" && uPass == "123456")) {
-                val fallbackUser = User(
-                    id = if (uName == "admin") 1 else 2,
-                    username = uName,
-                    password = uPass,
-                    role = if (uName == "admin") "admin" else "technician",
-                    permissions = "[\"dashboard\",\"new\",\"delivery\",\"management\",\"permissions\",\"printer\",\"settings\"]"
-                )
-                Result.success(fallbackUser)
-            } else {
-                Result.failure(Exception("خطأ في الاتصال بالشبكة: ${e.localizedMessage}"))
-            }
+            Result.failure(Exception("تعذر جلب مستخدمي الفرع من السيرفر: ${e.localizedMessage}"))
         }
     }
+
+    suspend fun createUser(
+        username: String,
+        password: String,
+        role: String,
+        permissions: String,
+        shopId: String
+    ): Result<User> = withContext(Dispatchers.IO) {
+        // Strict limit check before creating
+        try {
+            var usersResp = api.getAllUsers("eq.$shopId")
+            if (usersResp.code() == 404) usersResp = api.getAllUsersLower("eq.$shopId")
+            val existingList = usersResp.body() ?: _users.value.filter { it.shopId == shopId }
+            val currentCount = existingList.size
+
+            var shopResp = api.getShopConfig("eq.$shopId")
+            if (shopResp.code() == 404) shopResp = api.getShopConfigLower("eq.$shopId")
+            val shop = shopResp.body()?.firstOrNull() ?: _shops.value.find { it.id == shopId }
+            val limit = shop?.userLimit ?: 5
+
+            if (currentCount >= limit) {
+                return@withContext Result.failure(
+                    Exception("تم الوصول إلى الحد الأقصى للمستخدمين المسموح به لهذا المحل ($currentCount من أصل $limit مستخدم). يرجى ترقية باقة المحل في شاشة إدارة المنصة أولاً.")
+                )
+            }
+        } catch (e: Exception) {
+            // If check fails due to network, proceed carefully or log
+        }
+
+        val payload = mapOf<String, Any>(
+            "username" to username,
+            "password" to password,
+            "role" to role,
+            "permissions" to permissions,
+            "shop_id" to shopId
+        )
+        try {
+            var response = api.createUser(payload)
+            if (response.code() == 404) {
+                response = api.createUserLower(payload)
+            }
+            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
+                val created = response.body()!!.first()
+                _users.value = _users.value.filter { it.id != created.id } + created
+                // Sync new active user count
+                val newCount = _users.value.count { it.shopId == shopId }
+                try {
+                    api.updateShop("eq.$shopId", mapOf("active_user_count" to newCount))
+                } catch (ignored: Exception) {}
+                Result.success(created)
+            } else {
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("تعذر تسجيل المستخدم على السيرفر: ${e.localizedMessage}"))
+        }
+    }
+
+    suspend fun updateUser(
+        userId: Long,
+        username: String,
+        password: String,
+        role: String,
+        permissions: String?
+    ): Result<User> = withContext(Dispatchers.IO) {
+        val payload = mutableMapOf<String, Any>(
+            "username" to username,
+            "password" to password,
+            "role" to role
+        )
+        if (permissions != null) {
+            payload["permissions"] = permissions
+        }
+        try {
+            var response = api.updateUser("eq.$userId", payload)
+            if (response.code() == 404) {
+                response = api.updateUserLower("eq.$userId", payload)
+            }
+            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
+                val updated = response.body()!!.first()
+                _users.value = _users.value.map { if (it.id == userId) updated else it }
+                Result.success(updated)
+            } else {
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("تعذر تحديث بيانات المستخدم على السيرفر: ${e.localizedMessage}"))
+        }
+    }
+
+    suspend fun updateUserPermissions(userId: Long, permissionsJson: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            var response = api.updateUser("eq.$userId", mapOf("permissions" to permissionsJson))
+            if (response.code() == 404) {
+                response = api.updateUserLower("eq.$userId", mapOf("permissions" to permissionsJson))
+            }
+            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
+                val updated = response.body()!!.first()
+                _users.value = _users.value.map { if (it.id == userId) updated else it }
+                Result.success(true)
+            } else {
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("تعذر حفظ الصلاحيات على السيرفر: ${e.localizedMessage}"))
+        }
+    }
+
+    suspend fun saveUserPermissions(userId: Long, permissionsJson: String): Result<Boolean> =
+        updateUserPermissions(userId, permissionsJson)
+
+    suspend fun resetUserDeviceId(userId: Long): Result<User> = withContext(Dispatchers.IO) {
+        val payload = mapOf<String, Any>(
+            "device_id" to ""
+        )
+        try {
+            var response = api.updateUser("eq.$userId", payload)
+            if (response.code() == 404) {
+                response = api.updateUserLower("eq.$userId", payload)
+            }
+            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
+                val updated = response.body()!!.first()
+                _users.value = _users.value.map { if (it.id == userId) updated else it }
+                Result.success(updated)
+            } else {
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("تعذر فك قفل الجهاز على السيرفر: ${e.localizedMessage}"))
+        }
+    }
+
+    suspend fun deleteUser(userId: Long): Result<Boolean> = withContext(Dispatchers.IO) {
+        val userToDelete = _users.value.find { it.id == userId }
+        val shopId = userToDelete?.shopId
+        try {
+            var response = api.deleteUser("eq.$userId")
+            if (response.code() == 404) {
+                response = api.deleteUserLower("eq.$userId")
+            }
+            if (response.isSuccessful) {
+                _users.value = _users.value.filter { it.id != userId }
+                if (!shopId.isNullOrBlank()) {
+                    val newCount = _users.value.count { it.shopId == shopId }
+                    try {
+                        api.updateShop("eq.$shopId", mapOf("active_user_count" to newCount))
+                    } catch (ignored: Exception) {}
+                }
+                Result.success(true)
+            } else {
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("تعذر حذف المستخدم من السيرفر: ${e.localizedMessage}"))
+        }
+    }
+
+    // ==========================================
+    // MAINTENANCE DEVICES
+    // ==========================================
 
     suspend fun fetchDevices(shopId: String): Result<List<Device>> = withContext(Dispatchers.IO) {
         try {
-            val response = api.getDevices("eq.$shopId")
+            var response = api.getDevices("eq.$shopId")
+            if (response.code() == 404) {
+                response = api.getDevicesLower("eq.$shopId")
+            }
             if (response.isSuccessful && response.body() != null) {
                 val list = response.body()!!
                 _devices.value = list
                 Result.success(list)
             } else {
-                Result.failure(Exception("فشل تحميل قائمة الأجهزة"))
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            // Keep existing cache
-            Result.success(_devices.value.filter { it.shopId == shopId })
+            Result.failure(Exception("تعذر جلب الأجهزة من السيرفر: ${e.localizedMessage}"))
         }
     }
 
@@ -248,53 +531,20 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         if (dueDate != null) payload["due_date"] = dueDate
 
         try {
-            val response = api.createDevice(payload)
+            var response = api.createDevice(payload)
+            if (response.code() == 404) {
+                response = api.createDeviceLower(payload)
+            }
             if (response.isSuccessful && !response.body().isNullOrEmpty()) {
                 val created = response.body()!!.first()
                 _devices.value = listOf(created) + _devices.value
                 Result.success(created)
             } else {
-                // Local optimistic device creation
-                val localId = System.currentTimeMillis() % 10000
-                val localDev = Device(
-                    id = localId,
-                    customer_name = customerName,
-                    customer_phone = customerPhone,
-                    device_name = deviceName,
-                    issue_description = issueDescription,
-                    estimated_cost = estimatedCost ?: "0",
-                    down_payment = downPayment,
-                    technician = technician ?: "tech1",
-                    status = "received",
-                    detailed_status = "diagnosing",
-                    received_by_employee = receivedByEmployee ?: "موظف الاستلام",
-                    photo_url = photoUrl,
-                    due_date = dueDate,
-                    shopId = shopId
-                )
-                _devices.value = listOf(localDev) + _devices.value
-                Result.success(localDev)
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            val localId = System.currentTimeMillis() % 10000
-            val localDev = Device(
-                id = localId,
-                customer_name = customerName,
-                customer_phone = customerPhone,
-                device_name = deviceName,
-                issue_description = issueDescription,
-                estimated_cost = estimatedCost ?: "0",
-                down_payment = downPayment,
-                technician = technician ?: "tech1",
-                status = "received",
-                detailed_status = "diagnosing",
-                received_by_employee = receivedByEmployee ?: "موظف الاستلام",
-                photo_url = photoUrl,
-                due_date = dueDate,
-                shopId = shopId
-            )
-            _devices.value = listOf(localDev) + _devices.value
-            Result.success(localDev)
+            Result.failure(Exception("تعذر تسجيل الجهاز على السيرفر: ${e.localizedMessage}"))
         }
     }
 
@@ -317,235 +567,58 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         if (deliveredByEmployee != null) payload["delivered_by_employee"] = deliveredByEmployee
 
         try {
-            val response = api.updateDevice("eq.$id", payload)
+            var response = api.updateDevice("eq.$id", payload)
+            if (response.code() == 404) {
+                response = api.updateDeviceLower("eq.$id", payload)
+            }
             if (response.isSuccessful && !response.body().isNullOrEmpty()) {
                 val updated = response.body()!!.first()
                 _devices.value = _devices.value.map { if (it.id == id) updated else it }
                 Result.success(updated)
             } else {
-                val existing = _devices.value.find { it.id == id }
-                if (existing != null) {
-                    val updated = existing.copy(
-                        status = status,
-                        detailed_status = detailedStatus,
-                        technician_notes = notes ?: existing.technician_notes,
-                        parts_used_summary = partsUsed ?: existing.parts_used_summary,
-                        estimated_cost = finalCost ?: existing.estimated_cost,
-                        delivered_by_employee = deliveredByEmployee ?: existing.delivered_by_employee
-                    )
-                    _devices.value = _devices.value.map { if (it.id == id) updated else it }
-                    Result.success(updated)
-                } else {
-                    Result.failure(Exception("لم يتم العثور على الجهاز"))
-                }
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            val existing = _devices.value.find { it.id == id }
-            if (existing != null) {
-                val updated = existing.copy(
-                    status = status,
-                    detailed_status = detailedStatus,
-                    technician_notes = notes ?: existing.technician_notes,
-                    parts_used_summary = partsUsed ?: existing.parts_used_summary,
-                    estimated_cost = finalCost ?: existing.estimated_cost,
-                    delivered_by_employee = deliveredByEmployee ?: existing.delivered_by_employee
-                )
-                _devices.value = _devices.value.map { if (it.id == id) updated else it }
-                Result.success(updated)
-            } else {
-                Result.failure(e)
-            }
+            Result.failure(Exception("تعذر تحديث الجهاز على السيرفر: ${e.localizedMessage}"))
         }
     }
 
     suspend fun updateDeviceStatus(id: Long, newStatus: String): Result<Device> = withContext(Dispatchers.IO) {
         val payload = mapOf<String, Any>("status" to newStatus)
         try {
-            val response = api.updateDevice("eq.$id", payload)
+            var response = api.updateDevice("eq.$id", payload)
+            if (response.code() == 404) {
+                response = api.updateDeviceLower("eq.$id", payload)
+            }
             if (response.isSuccessful && !response.body().isNullOrEmpty()) {
                 val updated = response.body()!!.first()
                 _devices.value = _devices.value.map { if (it.id == id) updated else it }
                 Result.success(updated)
             } else {
-                val existing = _devices.value.find { it.id == id }
-                if (existing != null) {
-                    val updated = existing.copy(status = newStatus)
-                    _devices.value = _devices.value.map { if (it.id == id) updated else it }
-                    Result.success(updated)
-                } else {
-                    Result.failure(Exception("لم يتم العثور على الجهاز"))
-                }
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            val existing = _devices.value.find { it.id == id }
-            if (existing != null) {
-                val updated = existing.copy(status = newStatus)
-                _devices.value = _devices.value.map { if (it.id == id) updated else it }
-                Result.success(updated)
-            } else {
-                Result.failure(e)
-            }
+            Result.failure(Exception("تعذر تحديث حالة الجهاز على السيرفر: ${e.localizedMessage}"))
         }
     }
 
-    suspend fun fetchUsers(shopId: String): Result<List<User>> = withContext(Dispatchers.IO) {
+    suspend fun deleteDevice(id: Long): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
-            val response = api.getAllUsers("eq.$shopId")
-            if (response.isSuccessful && response.body() != null) {
-                val list = response.body()!!
-                _users.value = list
-                saveUsersToLocalPrefs()
-                Result.success(list)
-            } else {
-                Result.failure(Exception("فشل تحميل المستخدمين"))
+            var response = api.deleteDevice("eq.$id")
+            if (response.code() == 404) {
+                response = api.deleteDeviceLower("eq.$id")
             }
-        } catch (e: Exception) {
-            // Fallback list of users
-            val fallback = listOf(
-                User(1, "admin", "admin", "admin", "[\"dashboard\",\"new\",\"delivery\",\"management\",\"permissions\",\"printer\",\"settings\"]", shopId),
-                User(2, "hazem", "123456", "technician", "[\"dashboard\",\"new\",\"delivery\",\"management\"]", shopId),
-                User(3, "tech1", "tech1", "technician", "[\"management\"]", shopId)
-            )
-            _users.value = fallback
-            saveUsersToLocalPrefs()
-            Result.success(fallback)
-        }
-    }
-
-    suspend fun saveUserPermissions(userId: Long, permissionsJson: String): Result<Boolean> = withContext(Dispatchers.IO) {
-        try {
-            val response = api.updateUserPermissions("eq.$userId", mapOf("permissions" to permissionsJson))
             if (response.isSuccessful) {
-                _users.value = _users.value.map {
-                    if (it.id == userId) it.copy(permissions = permissionsJson) else it
-                }
-                saveUsersToLocalPrefs()
+                _devices.value = _devices.value.filter { it.id != id }
                 Result.success(true)
             } else {
-                _users.value = _users.value.map {
-                    if (it.id == userId) it.copy(permissions = permissionsJson) else it
-                }
-                saveUsersToLocalPrefs()
-                Result.success(true)
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            _users.value = _users.value.map {
-                if (it.id == userId) it.copy(permissions = permissionsJson) else it
-            }
-            saveUsersToLocalPrefs()
-            Result.success(true)
-        }
-    }
-
-    suspend fun createUser(
-        username: String,
-        password: String,
-        role: String,
-        permissions: String,
-        shopId: String
-    ): Result<User> = withContext(Dispatchers.IO) {
-        val payload = mapOf<String, Any>(
-            "username" to username,
-            "password" to password,
-            "role" to role,
-            "permissions" to permissions,
-            "shop_id" to shopId
-        )
-        try {
-            val response = api.createUser(payload)
-            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
-                val created = response.body()!!.first()
-                _users.value = _users.value + created
-                saveUsersToLocalPrefs()
-                Result.success(created)
-            } else {
-                val localId = System.currentTimeMillis() % 100000
-                val localUser = User(id = localId, username = username, password = password, role = role, permissions = permissions, shopId = shopId)
-                _users.value = _users.value + localUser
-                saveUsersToLocalPrefs()
-                Result.success(localUser)
-            }
-        } catch (e: Exception) {
-            val localId = System.currentTimeMillis() % 100000
-            val localUser = User(id = localId, username = username, password = password, role = role, permissions = permissions, shopId = shopId)
-            _users.value = _users.value + localUser
-            saveUsersToLocalPrefs()
-            Result.success(localUser)
-        }
-    }
-
-    suspend fun updateUser(
-        userId: Long,
-        username: String,
-        password: String,
-        role: String,
-        permissions: String?
-    ): Result<User> = withContext(Dispatchers.IO) {
-        val payload = mutableMapOf<String, Any>(
-            "username" to username,
-            "password" to password,
-            "role" to role
-        )
-        if (permissions != null) {
-            payload["permissions"] = permissions
-        }
-        try {
-            val response = api.updateUser("eq.$userId", payload)
-            if (response.isSuccessful && !response.body().isNullOrEmpty()) {
-                val updated = response.body()!!.first()
-                _users.value = _users.value.map { if (it.id == userId) updated else it }
-                saveUsersToLocalPrefs()
-                Result.success(updated)
-            } else {
-                val existing = _users.value.find { it.id == userId }
-                if (existing != null) {
-                    val updated = existing.copy(
-                        username = username,
-                        password = password,
-                        role = role,
-                        permissions = permissions ?: existing.permissions
-                    )
-                    _users.value = _users.value.map { if (it.id == userId) updated else it }
-                    saveUsersToLocalPrefs()
-                    Result.success(updated)
-                } else {
-                    Result.failure(Exception("لم يتم العثور على المستخدم"))
-                }
-            }
-        } catch (e: Exception) {
-            val existing = _users.value.find { it.id == userId }
-            if (existing != null) {
-                val updated = existing.copy(
-                    username = username,
-                    password = password,
-                    role = role,
-                    permissions = permissions ?: existing.permissions
-                )
-                _users.value = _users.value.map { if (it.id == userId) updated else it }
-                saveUsersToLocalPrefs()
-                Result.success(updated)
-            } else {
-                Result.failure(e)
-            }
-        }
-    }
-
-    suspend fun deleteUser(userId: Long): Result<Boolean> = withContext(Dispatchers.IO) {
-        try {
-            val response = api.deleteUser("eq.$userId")
-            if (response.isSuccessful) {
-                _users.value = _users.value.filter { it.id != userId }
-                saveUsersToLocalPrefs()
-                Result.success(true)
-            } else {
-                _users.value = _users.value.filter { it.id != userId }
-                saveUsersToLocalPrefs()
-                Result.success(true)
-            }
-        } catch (e: Exception) {
-            _users.value = _users.value.filter { it.id != userId }
-            saveUsersToLocalPrefs()
-            Result.success(true)
+            Result.failure(Exception("تعذر حذف الجهاز من السيرفر: ${e.localizedMessage}"))
         }
     }
 
@@ -577,16 +650,24 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         }
     }
 
+    // ==========================================
+    // INVENTORY & SPARE PARTS
+    // ==========================================
+
     suspend fun fetchInventoryParts(shopId: String): Result<List<InventoryPart>> = withContext(Dispatchers.IO) {
         try {
-            val response = api.getInventoryParts("eq.$shopId")
+            var response = api.getInventoryParts("eq.$shopId")
+            if (response.code() == 404) {
+                response = api.getInventoryPartsLower("eq.$shopId")
+            }
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                Result.failure(Exception("Failed to load parts from database"))
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(Exception("تعذر جلب قطع الغيار من السيرفر: ${e.localizedMessage}"))
         }
     }
 
@@ -604,14 +685,18 @@ class MaintenanceRepository(private val context: android.content.Context? = null
             "shop_id" to shopId
         )
         try {
-            val response = api.createInventoryPart(payload)
+            var response = api.createInventoryPart(payload)
+            if (response.code() == 404) {
+                response = api.createInventoryPartLower(payload)
+            }
             if (response.isSuccessful && !response.body().isNullOrEmpty()) {
                 Result.success(response.body()!!.first())
             } else {
-                Result.failure(Exception("Failed to save part to database"))
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(Exception("تعذر إضافة قطعة الغيار على السيرفر: ${e.localizedMessage}"))
         }
     }
 
@@ -627,27 +712,35 @@ class MaintenanceRepository(private val context: android.content.Context? = null
             "min_alert_stock" to part.min_alert_stock
         )
         try {
-            val response = api.updateInventoryPart("eq.$id", payload)
+            var response = api.updateInventoryPart("eq.$id", payload)
+            if (response.code() == 404) {
+                response = api.updateInventoryPartLower("eq.$id", payload)
+            }
             if (response.isSuccessful && !response.body().isNullOrEmpty()) {
                 Result.success(response.body()!!.first())
             } else {
-                Result.failure(Exception("Failed to update part in database"))
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(Exception("تعذر تحديث قطعة الغيار على السيرفر: ${e.localizedMessage}"))
         }
     }
 
     suspend fun fetchPartMovements(shopId: String): Result<List<PartMovementLog>> = withContext(Dispatchers.IO) {
         try {
-            val response = api.getPartMovements("eq.$shopId")
+            var response = api.getPartMovements("eq.$shopId")
+            if (response.code() == 404) {
+                response = api.getPartMovementsLower("eq.$shopId")
+            }
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                Result.failure(Exception("Failed to load movements from database"))
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(Exception("تعذر جلب سجل الحركات من السيرفر: ${e.localizedMessage}"))
         }
     }
 
@@ -668,14 +761,18 @@ class MaintenanceRepository(private val context: android.content.Context? = null
         if (movement.notes != null) payload["notes"] = movement.notes
 
         try {
-            val response = api.createPartMovement(payload)
+            var response = api.createPartMovement(payload)
+            if (response.code() == 404) {
+                response = api.createPartMovementLower(payload)
+            }
             if (response.isSuccessful && !response.body().isNullOrEmpty()) {
                 Result.success(response.body()!!.first())
             } else {
-                Result.failure(Exception("Failed to save movement to database"))
+                val err = parseHttpError(response.code(), response.errorBody()?.string())
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(Exception("تعذر تسجيل حركة القطعة على السيرفر: ${e.localizedMessage}"))
         }
     }
 }

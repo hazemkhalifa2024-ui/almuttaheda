@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddAlert
 import androidx.compose.material.icons.filled.Build
@@ -99,7 +100,8 @@ fun TechnicianWorkspaceScreen(
     onUpdateDetailedStatus: (Device, detailedStatus: String, mainStatus: String, notes: String?) -> Unit,
     onAttachPartToDevice: (Device, barcode: String, partName: String, qty: Int, cost: Double) -> Unit,
     onDeviceClick: (Device) -> Unit,
-    onDismissNotification: (Long) -> Unit
+    onDismissNotification: (Long) -> Unit,
+    onWhatsAppClick: (Device) -> Unit = {}
 ) {
     var selectedFilterTab by remember { mutableStateOf("all") } // "all", "new_received", "diagnosing", "in_repair", "ready"
     var searchQuery by remember { mutableStateOf("") }
@@ -576,21 +578,22 @@ fun TechnicianWorkspaceScreen(
                         }
                     }
 
-                    // Bottom Action Row: Attach Parts & Add Diagnostic Notes
+                    // Bottom Action Row: Attach Parts & Add Diagnostic Notes & WhatsApp
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         OutlinedButton(
                             onClick = {
                                 deviceForPartAttach = device
                             },
                             shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f).height(38.dp)
+                            modifier = Modifier.weight(1f).height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
                         ) {
-                            Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(15.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("إرفاق قطعة غيار", fontSize = 11.sp)
+                            Text("قطعة غيار", fontSize = 11.sp)
                         }
 
                         OutlinedButton(
@@ -599,11 +602,27 @@ fun TechnicianWorkspaceScreen(
                                 techNotesText = device.technician_notes ?: ""
                             },
                             shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f).height(38.dp)
+                            modifier = Modifier.weight(1f).height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
                         ) {
-                            Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(15.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("تدوين تقرير الفحص", fontSize = 11.sp)
+                            Text("تقرير الفحص", fontSize = 11.sp)
+                        }
+
+                        Button(
+                            onClick = { onWhatsAppClick(device) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF25D366),
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1.1f).height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "واتساب", modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("مراسلة واتساب", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

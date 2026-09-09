@@ -105,6 +105,7 @@ fun PrinterConfigScreen(
 
     // Master Dual Print
     var dualAutoPrintOnIntake by remember(currentConfig) { mutableStateOf(currentConfig.dualAutoPrintOnIntake) }
+    var printStickerTwiceOnSave by remember(currentConfig) { mutableStateOf(currentConfig.printStickerTwiceOnSave) }
 
     val paperOptions = listOf(
         "80mm" to "طابعة حرارية عريضة 80mm (ESC/POS القياسية)",
@@ -148,56 +149,127 @@ fun PrinterConfigScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = if (dualAutoPrintOnIntake) Color(0x1510B981) else MaterialTheme.colorScheme.surface),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 border = androidx.compose.foundation.BorderStroke(
                     1.5.dp,
-                    if (dualAutoPrintOnIntake) EmeraldPrimary else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
                 )
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    Text(
+                        text = "خيارات الطباعة الفورية عند الحفظ والاستلام:",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = EmeraldPrimary,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+
+                    // Option A: Print Receipt and Sticker (الطباعة المزدوجة)
                     Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (dualAutoPrintOnIntake) EmeraldPrimary else Slate400.copy(alpha = 0.2f)),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = if (dualAutoPrintOnIntake) Color.White else Slate400)
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (dualAutoPrintOnIntake) EmeraldPrimary else Slate400.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = if (dualAutoPrintOnIntake) Color.White else Slate400, modifier = Modifier.size(18.dp))
+                            }
+                            Column {
+                                Text(
+                                    text = "طباعة ريسيت واستيكر معاً عند الحفظ",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "عند الاستلام، تطبع طابعة الريسيت وطابعة الباركود معاً تلقائياً",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        Column {
-                            Text(
-                                text = "الطباعة المزدوجة التلقائية فور الاستلام",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
+
+                        Switch(
+                            checked = dualAutoPrintOnIntake,
+                            onCheckedChange = { 
+                                dualAutoPrintOnIntake = it
+                                if (it) {
+                                    printStickerTwiceOnSave = false
+                                }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = EmeraldPrimary
                             )
-                            Text(
-                                text = "عند حفظ استلام الجهاز تطبع الطابعتان فوراً (الريسيت + الاستيكر) معاً",
-                                fontSize = 11.sp,
-                                color = if (dualAutoPrintOnIntake) EmeraldPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        )
                     }
 
-                    Switch(
-                        checked = dualAutoPrintOnIntake,
-                        onCheckedChange = { dualAutoPrintOnIntake = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = EmeraldPrimary
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+
+                    // Option B: Print Sticker Twice
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (printStickerTwiceOnSave) StatusBlue else Slate400.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Label, contentDescription = null, tint = if (printStickerTwiceOnSave) Color.White else Slate400, modifier = Modifier.size(18.dp))
+                            }
+                            Column {
+                                Text(
+                                    text = "طباعة الاستيكر مرتين عند الحفظ",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "عند الاستلام، يتم طباعة ملصق الباركود مرتين متتاليتين تلقائياً",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = printStickerTwiceOnSave,
+                            onCheckedChange = { 
+                                printStickerTwiceOnSave = it
+                                if (it) {
+                                    dualAutoPrintOnIntake = false
+                                }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = StatusBlue
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -611,7 +683,8 @@ fun PrinterConfigScreen(
                                 stickerPrinterIp = stickerPrinterIp,
                                 stickerWidth = stickerWidth,
                                 autoPrintStickerOnIntake = autoPrintStickerOnIntake,
-                                dualAutoPrintOnIntake = dualAutoPrintOnIntake
+                                dualAutoPrintOnIntake = dualAutoPrintOnIntake,
+                                printStickerTwiceOnSave = printStickerTwiceOnSave
                             )
                             onSaveConfig(newConfig)
                             Toast.makeText(context, "تم حفظ إعدادات الطابعتين بنجاح", Toast.LENGTH_SHORT).show()

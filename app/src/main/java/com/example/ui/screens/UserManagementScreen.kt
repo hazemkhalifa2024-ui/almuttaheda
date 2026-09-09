@@ -29,9 +29,11 @@ import com.example.ui.theme.RedAccent
 fun UserManagementScreen(
     users: List<User>,
     currentUsername: String,
+    shopName: String = "المحل",
     onCreateUser: (String, String, String) -> Unit,
     onUpdateUser: (Long, String, String, String) -> Unit,
     onDeleteUser: (Long) -> Unit,
+    onResetUserDeviceId: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -104,7 +106,8 @@ fun UserManagementScreen(
                         user = user,
                         isCurrentUser = user.username.equals(currentUsername, ignoreCase = true),
                         onEdit = { userToEdit = user },
-                        onDelete = { userToDelete = user }
+                        onDelete = { userToDelete = user },
+                        onResetDeviceLock = { onResetUserDeviceId(user.id) }
                     )
                 }
             }
@@ -116,6 +119,7 @@ fun UserManagementScreen(
         UserFormDialog(
             title = "إنشاء حساب جديد للموظف",
             confirmLabel = "إنشاء الحساب",
+            shopName = shopName,
             onDismiss = { showCreateDialog = false },
             onSubmit = { username, password, role ->
                 onCreateUser(username, password, role)
@@ -129,6 +133,7 @@ fun UserManagementScreen(
         UserFormDialog(
             title = "تعديل بيانات الحساب (${user.username})",
             confirmLabel = "حفظ التعديلات",
+            shopName = shopName,
             initialUsername = user.username,
             initialPassword = user.password,
             initialRole = user.role,
@@ -178,9 +183,24 @@ fun UserCard(
     user: User,
     isCurrentUser: Boolean,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onResetDeviceLock: (() -> Unit)? = null
 ) {
     val isAdmin = user.role == "admin"
+    val isReception = user.role == "reception"
+
+    val roleLabel = when (user.role) {
+        "admin" -> "مدير النظام"
+        "reception" -> "موظف استقبال"
+        else -> "فني صيانة"
+    }
+
+    val roleColor = when (user.role) {
+        "admin" -> EmeraldPrimary
+        "reception" -> Color(0xFF0284C7)
+        else -> MaterialTheme.colorScheme.secondary
+    }
+
     val cardColor = if (isCurrentUser) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
     } else {
@@ -215,15 +235,19 @@ fun UserCard(
                     modifier = Modifier
                         .size(44.dp)
                         .background(
-                            color = if (isAdmin) EmeraldPrimary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.secondaryContainer,
+                            color = roleColor.copy(alpha = 0.15f),
                             shape = RoundedCornerShape(12.dp)
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = if (isAdmin) Icons.Default.Shield else Icons.Default.Engineering,
+                        imageVector = when (user.role) {
+                            "admin" -> Icons.Default.Shield
+                            "reception" -> Icons.Default.Person
+                            else -> Icons.Default.Engineering
+                        },
                         contentDescription = null,
-                        tint = if (isAdmin) EmeraldPrimary else MaterialTheme.colorScheme.secondary
+                        tint = roleColor
                     )
                 }
 
@@ -250,17 +274,25 @@ fun UserCard(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
-                            text = if (isAdmin) "مدير النظام" else "فني صيانة",
+                            text = roleLabel,
                             fontSize = 12.sp,
-                            color = if (isAdmin) EmeraldPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (isAdmin) FontWeight.Medium else FontWeight.Normal
+                            color = roleColor,
+                            fontWeight = FontWeight.Medium
                         )
                         Text("•", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                        Text(
-                            text = "رقم التعريف: ${user.id}",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        if (!user.deviceId.isNullOrBlank()) {
+                            Badge(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
+                                    Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(10.dp))
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text("مقيد بهاتف", fontSize = 9.sp)
+                                }
+                            }
+                        } else {
+                            Badge(containerColor = EmeraldPrimary.copy(alpha = 0.2f), contentColor = EmeraldPrimary) {
+                                Text("جهاز غير مقيد", fontSize = 9.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                            }
+                        }
                     }
                 }
             }
@@ -270,6 +302,15 @@ fun UserCard(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (!user.deviceId.isNullOrBlank() && onResetDeviceLock != null) {
+                    IconButton(
+                        onClick = onResetDeviceLock,
+                        colors = IconButtonDefaults.iconButtonColors(contentColor = EmeraldPrimary)
+                    ) {
+                        Icon(Icons.Default.LockOpen, contentDescription = "فك قيد الهاتف")
+                    }
+                }
+
                 IconButton(
                     onClick = onEdit,
                     colors = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.primary)
@@ -296,6 +337,7 @@ fun UserCard(
 fun UserFormDialog(
     title: String,
     confirmLabel: String,
+    shopName: String = "",
     initialUsername: String = "",
     initialPassword: String = "",
     initialRole: String = "technician",
@@ -303,13 +345,37 @@ fun UserFormDialog(
     onDismiss: () -> Unit,
     onSubmit: (String, String, String) -> Unit
 ) {
-    var username by remember { mutableStateOf(initialUsername) }
+    val cleanPrefix = shopName.trim().ifBlank { "shop" }
+    
+    // In create mode, manager enters the username suffix
+    var usernameSuffix by remember {
+        mutableStateOf(
+            if (isEditMode) {
+                initialUsername
+            } else {
+                if (initialUsername.startsWith("$cleanPrefix-")) {
+                    initialUsername.removePrefix("$cleanPrefix-")
+                } else {
+                    initialUsername
+                }
+            }
+        )
+    }
     var password by remember { mutableStateOf(initialPassword) }
     var role by remember { mutableStateOf(initialRole) }
     var passwordVisible by remember { mutableStateOf(false) }
 
     var usernameError by remember { mutableStateOf(false) }
     var passwordError by remember { mutableStateOf(false) }
+
+    val fullUsername = remember(usernameSuffix, isEditMode, cleanPrefix) {
+        val trimmed = usernameSuffix.trim()
+        if (isEditMode) {
+            trimmed
+        } else {
+            if (trimmed.startsWith("$cleanPrefix-")) trimmed else "$cleanPrefix-$trimmed"
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -326,20 +392,26 @@ fun UserFormDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 // Username field
                 OutlinedTextField(
-                    value = username,
+                    value = usernameSuffix,
                     onValueChange = {
-                        username = it
+                        usernameSuffix = it
                         usernameError = false
                     },
                     label = { Text("اسم المستخدم") },
-                    placeholder = { Text("أدخل اسم فريد (مثل: ahmad)") },
+                    placeholder = { Text(if (!isEditMode) "مثال: ahmad أو فني_1" else "اسم المستخدم") },
+                    prefix = if (!isEditMode) {
+                        { Text("$cleanPrefix-", fontWeight = FontWeight.Bold, color = EmeraldPrimary) }
+                    } else null,
+                    supportingText = if (!isEditMode && usernameSuffix.isNotBlank()) {
+                        { Text("اسم الدخول النهائي: $fullUsername", fontSize = 11.sp, color = EmeraldPrimary, fontWeight = FontWeight.SemiBold) }
+                    } else null,
                     isError = usernameError,
                     singleLine = true,
-                    enabled = !isEditMode, // prevent username modification in edit mode for ease of use
+                    enabled = !isEditMode,
                     leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = EmeraldPrimary) },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
@@ -349,7 +421,7 @@ fun UserFormDialog(
                     )
                 )
                 if (usernameError) {
-                    Text("يرجى إدخال اسم مستخدم صحيح (3 أحرف على الأقل)", color = RedAccent, fontSize = 11.sp)
+                    Text("يرجى إدخال اسم مستخدم صحيح (حرفين على الأقل)", color = RedAccent, fontSize = 11.sp)
                 }
 
                 // Password field
@@ -384,12 +456,12 @@ fun UserFormDialog(
                     Text("يرجى إدخال كلمة مرور صحيحة (4 أحرف على الأقل)", color = RedAccent, fontSize = 11.sp)
                 }
 
-                // Role Selector (Admin / Tech)
+                // Role Selector (Technician / Reception / Admin)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("نوع الصلاحية والدور:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         // Technician Card option
                         Card(
@@ -400,7 +472,7 @@ fun UserFormDialog(
                                 containerColor = if (role == "technician") EmeraldPrimary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surface
                             ),
                             border = androidx.compose.foundation.BorderStroke(
-                                width = 1.5.dp,
+                                width = if (role == "technician") 1.5.dp else 1.dp,
                                 color = if (role == "technician") EmeraldPrimary else MaterialTheme.colorScheme.outlineVariant
                             ),
                             shape = RoundedCornerShape(12.dp)
@@ -408,12 +480,48 @@ fun UserFormDialog(
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(12.dp),
+                                    .padding(vertical = 10.dp, horizontal = 4.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Icon(Icons.Default.Engineering, contentDescription = null, tint = if (role == "technician") EmeraldPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("فني صيانة", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Icon(
+                                    Icons.Default.Engineering,
+                                    contentDescription = null,
+                                    tint = if (role == "technician") EmeraldPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Text("فني صيانة", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        // Reception Card option
+                        Card(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { role = "reception" },
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (role == "reception") Color(0xFF0284C7).copy(alpha = 0.12f) else MaterialTheme.colorScheme.surface
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(
+                                width = if (role == "reception") 1.5.dp else 1.dp,
+                                color = if (role == "reception") Color(0xFF0284C7) else MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Person,
+                                    contentDescription = null,
+                                    tint = if (role == "reception") Color(0xFF0284C7) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Text("استقبال", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 
@@ -426,7 +534,7 @@ fun UserFormDialog(
                                 containerColor = if (role == "admin") EmeraldPrimary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surface
                             ),
                             border = androidx.compose.foundation.BorderStroke(
-                                width = 1.5.dp,
+                                width = if (role == "admin") 1.5.dp else 1.dp,
                                 color = if (role == "admin") EmeraldPrimary else MaterialTheme.colorScheme.outlineVariant
                             ),
                             shape = RoundedCornerShape(12.dp)
@@ -434,12 +542,17 @@ fun UserFormDialog(
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(12.dp),
+                                    .padding(vertical = 10.dp, horizontal = 4.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Icon(Icons.Default.Shield, contentDescription = null, tint = if (role == "admin") EmeraldPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("مدير النظام", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Icon(
+                                    Icons.Default.Shield,
+                                    contentDescription = null,
+                                    tint = if (role == "admin") EmeraldPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Text("مدير فرع", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -449,13 +562,13 @@ fun UserFormDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val isUsernameInvalid = username.trim().length < 3
+                    val isUsernameInvalid = usernameSuffix.trim().length < 2
                     val isPasswordInvalid = password.length < 4
                     if (isUsernameInvalid) usernameError = true
                     if (isPasswordInvalid) passwordError = true
 
                     if (!isUsernameInvalid && !isPasswordInvalid) {
-                        onSubmit(username.trim(), password, role)
+                        onSubmit(fullUsername, password, role)
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary)
